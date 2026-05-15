@@ -1,0 +1,255 @@
+"""Alle Zeichenfunktionen für den ml-game Client."""
+
+import math
+from typing import Optional
+
+import pygame
+
+from constants import (
+    BG, GRID, ORIGIN, WHITE, GRAY, DARK, DIMGRAY,
+    HP_HIGH, HP_MID, HP_LOW,
+    MAX_HP, MINIMAP_SIZE, MINIMAP_SCALE, INDICATOR_DIST,
+)
+
+
+# ── Koordinaten-Hilfen ────────────────────────────────────────────────────────
+
+def w2s(wx: float, wy: float, cam_x: float, cam_y: float,
+        sw: int, sh: int) -> tuple[int, int]:
+    """Welt- → Bildschirmkoordinaten."""
+    return (int(wx - cam_x + sw // 2), int(wy - cam_y + sh // 2))
+
+
+def rotate_pts(pts: list[tuple[float, float]], angle: float,
+               ox: float, oy: float) -> list[tuple[float, float]]:
+    cos_a, sin_a = math.cos(angle), math.sin(angle)
+    return [
+        (ox + px * cos_a - py * sin_a,
+         oy + px * sin_a + py * cos_a)
+        for px, py in pts
+    ]
+
+
+# ── Spielfeld ─────────────────────────────────────────────────────────────────
+
+def draw_grid(surf: pygame.Surface, cam_x: float, cam_y: float) -> None:
+    sw, sh = surf.get_size()
+    gs = 100
+    x0 = math.floor((cam_x - sw / 2) / gs) * gs
+    y0 = math.floor((cam_y - sh / 2) / gs) * gs
+
+    for wx in range(int(x0), int(cam_x + sw / 2 + gs), gs):
+        sx = int(wx - cam_x + sw // 2)
+        pygame.draw.line(surf, GRID, (sx, 0), (sx, sh))
+    for wy in range(int(y0), int(cam_y + sh / 2 + gs), gs):
+        sy = int(wy - cam_y + sh // 2)
+        pygame.draw.line(surf, GRID, (0, sy), (sw, sy))
+
+    ox, oy = w2s(0, 0, cam_x, cam_y, sw, sh)
+    pygame.draw.line(surf, ORIGIN, (ox - 12, oy), (ox + 12, oy), 2)
+    pygame.draw.line(surf, ORIGIN, (ox, oy - 12), (ox, oy + 12), 2)
+
+
+# ── Raumschiff ────────────────────────────────────────────────────────────────
+
+def draw_ship(surf: pygame.Surface, ship: dict, is_me: bool,
+              cam_x: float, cam_y: float) -> None:
+    if not ship["alive"]:
+        return
+
+    sw, sh = surf.get_size()
+    sx, sy = w2s(ship["x"], ship["y"], cam_x, cam_y, sw, sh)
+    angle  = ship["angle"]
+    fill   = WHITE if is_me else GRAY
+    stroke = DARK  if is_me else DIMGRAY
+
+    def rot(pts):
+        return rotate_pts(pts, angle, sx, sy)
+
+    # Delta-Dreieck (Nase zeigt in Zielrichtung)
+    body = rot([(20, 0), (-11, -13), (-11, 13)])
+    pygame.draw.polygon(surf, fill,   body)
+    pygame.draw.polygon(surf, stroke, body, 2)
+
+    # Cockpit-Detail (dunkles Innendreieck)
+    cockpit = rot([(11, 0), (-4, -6), (-4, 6)])
+    pygame.draw.polygon(surf, stroke, cockpit)
+
+    # Triebwerks-Markierung (kleines Rechteck am Heck)
+    engine = rot([(-11, -5), (-16, -5), (-16, 5), (-11, 5)])
+    pygame.draw.polygon(surf, stroke, engine)
+
+    # Lebensbalken
+    bw, bh = 36, 4
+    bx, by = sx - bw // 2, sy - 32
+    pygame.draw.rect(surf, (30, 30, 30), (bx, by, bw, bh))
+    ratio   = ship["health"] / MAX_HP
+    bar_col = HP_HIGH if ratio > 0.6 else (HP_MID if ratio > 0.3 else HP_LOW)
+    pygame.draw.rect(surf, bar_col, (bx, by, int(bw * ratio), bh))
+
+
+# ── Feind-Richtungsindikatoren ────────────────────────────────────────────────
+
+def draw_enemy_indicators(surf: pygame.Surface, ships: list,
+                          my_id: Optional[str]) -> None:
+    """Kleine Dreiecke um den Spieler zeigen die Richtung zu Feinden."""
+    sw, sh = surf.get_size()
+    cx, cy = sw // 2, sh // 2
+
+    my_ship = next((s for s in ships if s["id"] == my_id), None)
+    if not my_ship:
+        return
+
+    for ship in ships:
+        if ship["id"] == my_id or not ship["alive"]:
+            continue
+
+        dx = ship["x"] - my_ship["x"]
+        dy = ship["y"] - my_ship["y"]
+        dist = math.hypot(dx, dy)
+        if dist < 1:
+            continue
+
+        angle = math.atan2(dy, dx)
+        ix = int(cx + math.cos(angle) * INDICATOR_DIST)
+        iy = int(cy + math.sin(angle) * INDICATOR_DIST)
+
+        # Dreieck zeigt in Richtung Feind; Helligkeit skaliert mit Nähe
+        brightness = max(60, min(180, int(200 - dist / 8)))
+        col = (brightness, brightness, brightness)
+        SIZE = 7
+        pts = rotate_pts(
+            [(SIZE, 0), (-SIZE * 0.7, -SIZE * 0.65), (-SIZE * 0.7, SIZE * 0.65)],
+            angle, ix, iy,
+        )
+        pygame.draw.polygon(surf, col, pts)
+
+
+# ── Geschoss ──────────────────────────────────────────────────────────────────
+
+def draw_bullet(surf: pygame.Surface, b: dict,
+                cam_x: float, cam_y: float) -> None:
+    sw, sh = surf.get_size()
+    sx, sy = w2s(b["x"], b["y"], cam_x, cam_y, sw, sh)
+    glow = pygame.Surface((18, 18), pygame.SRCALPHA)
+    pygame.draw.circle(glow, (255, 255, 255, 28), (9, 9), 8)
+    surf.blit(glow, (sx - 9, sy - 9))
+    pygame.draw.circle(surf, WHITE, (sx, sy), 3)
+
+
+# ── Visuelle Effekte ──────────────────────────────────────────────────────────
+
+def draw_effect(surf: pygame.Surface, ef: dict, dt: float,
+                cam_x: float, cam_y: float) -> bool:
+    """Aktualisiert und zeichnet einen Effekt. Gibt False zurück wenn abgelaufen."""
+    ef["age"] += dt
+    if ef["age"] >= ef["duration"]:
+        return False
+
+    sw, sh = surf.get_size()
+    sx, sy = w2s(ef["x"], ef["y"], cam_x, cam_y, sw, sh)
+    p     = ef["age"] / ef["duration"]
+    alpha = int((1 - p) * 220)
+
+    if ef["type"] == "kill":
+        for radius, a_fac in [(int(65 * p), 1.0), (int(35 * p), 0.4)]:
+            if radius < 1:
+                continue
+            tmp = pygame.Surface((radius * 2 + 4, radius * 2 + 4), pygame.SRCALPHA)
+            pygame.draw.circle(tmp, (210, 210, 210, int(alpha * a_fac)),
+                               (radius + 2, radius + 2), radius, 3)
+            surf.blit(tmp, (sx - radius - 2, sy - radius - 2))
+    else:
+        r = int(26 * p)
+        if r > 0:
+            tmp = pygame.Surface((r * 2 + 4, r * 2 + 4), pygame.SRCALPHA)
+            pygame.draw.circle(tmp, (200, 200, 200, alpha), (r + 2, r + 2), r, 2)
+            surf.blit(tmp, (sx - r - 2, sy - r - 2))
+
+    return True
+
+
+# ── Fadenkreuz ────────────────────────────────────────────────────────────────
+
+def draw_crosshair(surf: pygame.Surface, mx: int, my: int) -> None:
+    S = 10
+    pygame.draw.line(surf, GRAY, (mx - S, my), (mx + S, my), 1)
+    pygame.draw.line(surf, GRAY, (mx, my - S), (mx, my + S), 1)
+    pygame.draw.circle(surf, GRAY, (mx, my), 6, 1)
+
+
+# ── Minimap ───────────────────────────────────────────────────────────────────
+
+def draw_minimap(surf: pygame.Surface, ships: list, my_id: Optional[str]) -> None:
+    S  = MINIMAP_SIZE
+    mm = pygame.Surface((S, S), pygame.SRCALPHA)
+    mm.fill((0, 0, 0, 160))
+    pygame.draw.rect(mm, (42, 42, 42, 255), mm.get_rect(), 1)
+
+    my_ship = next((s for s in ships if s["id"] == my_id), None)
+    cx = my_ship["x"] if my_ship else 0.0
+    cy = my_ship["y"] if my_ship else 0.0
+
+    for s in ships:
+        if not s["alive"]:
+            continue
+        mx_  = int(S / 2 + (s["x"] - cx) * MINIMAP_SCALE)
+        my_  = int(S / 2 + (s["y"] - cy) * MINIMAP_SCALE)
+        if 0 <= mx_ < S and 0 <= my_ < S:
+            col = (230, 230, 230) if s["id"] == my_id else (90, 90, 90)
+            r   = 4 if s["id"] == my_id else 3
+            pygame.draw.circle(mm, col, (mx_, my_), r)
+
+    half = S // 2
+    pygame.draw.line(mm, (40, 40, 40), (half - 6, half), (half + 6, half))
+    pygame.draw.line(mm, (40, 40, 40), (half, half - 6), (half, half + 6))
+
+    sw, sh = surf.get_size()
+    surf.blit(mm, (sw - S - 16, sh - S - 16))
+
+
+# ── HUD ───────────────────────────────────────────────────────────────────────
+
+def draw_hud(surf: pygame.Surface, ships: list, my_id: Optional[str],
+             status: str, font_sm: pygame.font.Font,
+             font_lg: pygame.font.Font) -> None:
+    surf_w = surf.get_width()
+
+    surf.blit(font_sm.render(status, True, (68, 68, 68)), (16, 16))
+
+    my_ship = next((s for s in ships if s["id"] == my_id), None)
+    if my_ship:
+        hp = "* " * my_ship["health"] + ". " * (MAX_HP - my_ship["health"])
+        surf.blit(font_lg.render(hp.strip(), True, WHITE), (16, 36))
+
+    hint = font_sm.render(
+        "WASD: Bewegen  |  Maus: Zielen  |  LMB / Leertaste: Schiessen  |  ESC: Menue",
+        True, (50, 50, 50),
+    )
+    surf.blit(hint, (16, 70))
+
+    title = font_sm.render("PUNKTE", True, (48, 48, 48))
+    surf.blit(title, (surf_w - title.get_width() - 16, 16))
+
+    for i, s in enumerate(sorted(ships, key=lambda x: -x["score"])):
+        you  = "  <- du" if s["id"] == my_id else ""
+        dead = "  x"    if not s["alive"]    else ""
+        col  = (200, 200, 200) if s["id"] == my_id else (90, 90, 90)
+        label = font_sm.render(f"{s['score']} kills{you}{dead}", True, col)
+        surf.blit(label, (surf_w - label.get_width() - 16, 36 + i * 20))
+
+
+# ── Tod-Overlay ───────────────────────────────────────────────────────────────
+
+def draw_death_overlay(surf: pygame.Surface,
+                       font_xl: pygame.font.Font,
+                       font_md: pygame.font.Font) -> None:
+    overlay = pygame.Surface(surf.get_size(), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 140))
+    surf.blit(overlay, (0, 0))
+
+    sw, sh = surf.get_size()
+    t1 = font_xl.render("ZERSTOERT", True, (190, 190, 190))
+    t2 = font_md.render("Respawn in 3 Sekunden...", True, (75, 75, 75))
+    surf.blit(t1, (sw // 2 - t1.get_width() // 2, sh // 2 - t1.get_height() // 2))
+    surf.blit(t2, (sw // 2 - t2.get_width() // 2, sh // 2 + 44))
