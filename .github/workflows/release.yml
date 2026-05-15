@@ -63,17 +63,22 @@ jobs:
 
       - name: Binary bauen
         working-directory: client
-        run: |
-          pyinstaller \
-            --onefile \
-            --collect-all pygame \
-            --name tank-game \
-            main.py
+        run: >-
+          pyinstaller
+          --onefile
+          --collect-all pygame
+          --collect-all websockets
+          --name tank-game
+          main.py
+
+      # Als tar.gz verpacken, damit das Execute-Bit beim Download erhalten bleibt
+      - name: Als tar.gz verpacken
+        run: tar -czf tank-game-linux.tar.gz -C client/dist tank-game
 
       - uses: actions/upload-artifact@v4
         with:
           name: client-linux
-          path: client/dist/tank-game
+          path: tank-game-linux.tar.gz
 
   # ── Client-Binary: Windows ─────────────────────────────────────────────────
   client-windows:
@@ -94,18 +99,19 @@ jobs:
 
       - name: Binary bauen
         working-directory: client
-        run: |
-          pyinstaller `
-            --onefile `
-            --collect-all pygame `
-            --noconsole `
-            --name tank-game `
-            main.py
+        run: >-
+          pyinstaller
+          --onefile
+          --collect-all pygame
+          --collect-all websockets
+          --noconsole
+          --name tank-game
+          main.py
 
       - uses: actions/upload-artifact@v4
         with:
           name: client-windows
-          path: client/dist/tank-game.exe
+          path: client\dist\tank-game.exe
 
   # ── GitHub Release ─────────────────────────────────────────────────────────
   release:
@@ -115,6 +121,8 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4   # für docker-compose.yml
+
       - uses: actions/download-artifact@v4
         with:
           name: client-linux
@@ -125,18 +133,18 @@ jobs:
           name: client-windows
           path: dist/
 
-      - name: Binaries vorbereiten
-        run: |
-          mv dist/tank-game dist/tank-game-linux
-          chmod +x dist/tank-game-linux
+      # Windows-Exe umbenennen (eindeutiger Dateiname im Release)
+      - name: Assets vorbereiten
+        run: mv dist/tank-game.exe dist/tank-game-windows.exe
 
       - name: Release erstellen
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
-            dist/tank-game-linux
+            dist/tank-game-linux.tar.gz
             dist/tank-game-windows.exe
+            docker-compose.yml
           body: |
             ## Tank Game ${{ github.ref_name }}
 
@@ -146,29 +154,22 @@ jobs:
             docker pull ghcr.io/${{ github.repository }}/server:${{ github.ref_name }}
             ```
 
-            `docker-compose.yml` für den Server:
-            ```yaml
-            services:
-              server:
-                image: ghcr.io/${{ github.repository }}/server:${{ github.ref_name }}
-                ports:
-                  - "3001:3001"
-                restart: unless-stopped
+            Die mitgelieferte `docker-compose.yml` starten:
+            ```bash
+            # Versionsnummer im Image-Tag anpassen, dann:
+            docker compose up -d
             ```
 
             ### Client
 
-            | Plattform | Datei |
-            |-----------|-------|
-            | Linux     | `tank-game-linux` |
-            | Windows   | `tank-game-windows.exe` |
+            | Plattform | Datei | Hinweis |
+            |-----------|-------|---------|
+            | Linux     | `tank-game-linux.tar.gz` | `tar xzf tank-game-linux.tar.gz && ./tank-game` |
+            | Windows   | `tank-game-windows.exe`  | Direkt ausführen |
 
+            Anderen Server angeben (überspringt das Menü):
             ```bash
-            # Verbindet standardmäßig mit ws://localhost:3001/ws
-            ./tank-game-linux
-
-            # Anderen Server angeben:
-            ./tank-game-linux ws://mein-server:3001/ws
+            ./tank-game ws://mein-server:3001/ws
             ```
 
             > Bot-Clients verbinden mit `?type=bot` – der Server sendet dann
