@@ -295,7 +295,7 @@ def draw_minimap(surf: pygame.Surface, ships: list, my_id: Optional[str]) -> Non
         mx_  = int(S / 2 + (s["x"] - cx) * MINIMAP_SCALE)
         my_  = int(S / 2 + (s["y"] - cy) * MINIMAP_SCALE)
         if 0 <= mx_ < S and 0 <= my_ < S:
-            col = (230, 230, 230) if s["id"] == my_id else (90, 90, 90)
+            col = _player_color(s["id"])
             r   = 4 if s["id"] == my_id else 3
             pygame.draw.circle(mm, col, (mx_, my_), r)
 
