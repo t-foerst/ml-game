@@ -1,6 +1,7 @@
 """Alle Zeichenfunktionen für den ml-game Client."""
 
 import math
+from pathlib import Path
 from typing import Optional
 
 import pygame
@@ -10,6 +11,72 @@ from constants import (
     HP_HIGH, HP_MID, HP_LOW,
     MAX_HP, MINIMAP_SIZE, MINIMAP_SCALE, INDICATOR_DIST,
 )
+
+
+# ── Parallax-Hintergrund ──────────────────────────────────────────────────────
+
+_ASSETS = Path(__file__).parent / "assets"
+_bg_surf:     Optional[pygame.Surface] = None
+_nebula_surf: Optional[pygame.Surface] = None
+_bg_scaled:   Optional[pygame.Surface] = None
+_bg_scaled_size: tuple[int, int]       = (0, 0)
+
+_BG_PARALLAX     = 0.03
+_NEBULA_PARALLAX = 0.12
+_BG_PAD          = 100  # px Puffer rundherum für Parallax-Verschiebung
+
+
+def _load_backgrounds() -> None:
+    global _bg_surf, _nebula_surf
+    if _bg_surf is None:
+        try:
+            _bg_surf = pygame.image.load(str(_ASSETS / "background-green.jpg")).convert()
+        except Exception:
+            pass
+    if _nebula_surf is None:
+        try:
+            _nebula_surf = pygame.image.load(str(_ASSETS / "nebula.png")).convert_alpha()
+        except Exception:
+            pass
+
+
+def _draw_tiled(surf: pygame.Surface, img: pygame.Surface,
+                cam_x: float, cam_y: float, factor: float) -> None:
+    iw, ih = img.get_size()
+    sw, sh = surf.get_size()
+    ox = int(cam_x * factor) % iw
+    oy = int(cam_y * factor) % ih
+    x = -ox
+    while x < sw:
+        y = -oy
+        while y < sh:
+            surf.blit(img, (x, y))
+            y += ih
+        x += iw
+
+
+def draw_background(surf: pygame.Surface, cam_x: float, cam_y: float) -> None:
+    global _bg_scaled, _bg_scaled_size
+    _load_backgrounds()
+    if _bg_surf is None:
+        return
+
+    sw, sh = surf.get_size()
+    target = (sw + _BG_PAD * 2, sh + _BG_PAD * 2)
+    if target != _bg_scaled_size:
+        _bg_scaled = pygame.transform.smoothscale(_bg_surf, target)
+        _bg_scaled_size = target
+
+    half = _BG_PAD
+    ox = max(-half, min(half, int(cam_x * _BG_PARALLAX)))
+    oy = max(-half, min(half, int(cam_y * _BG_PARALLAX)))
+    surf.blit(_bg_scaled, (-half - ox, -half - oy))
+
+
+def draw_nebula(surf: pygame.Surface, cam_x: float, cam_y: float) -> None:
+    _load_backgrounds()
+    if _nebula_surf:
+        _draw_tiled(surf, _nebula_surf, cam_x, cam_y, _NEBULA_PARALLAX)
 
 
 # ── Koordinaten-Hilfen ────────────────────────────────────────────────────────
@@ -50,6 +117,28 @@ def draw_grid(surf: pygame.Surface, cam_x: float, cam_y: float) -> None:
     pygame.draw.line(surf, ORIGIN, (ox, oy - 12), (ox, oy + 12), 2)
 
 
+# ── Spielerfarben ─────────────────────────────────────────────────────────────
+
+_PLAYER_COLORS = [
+    (220,  50,  50),  # Rot
+    (160,  60, 220),  # Lila
+    (230, 210,  40),  # Gelb
+    ( 50, 120, 220),  # Blau
+    ( 50, 200,  80),  # Grün
+    (230, 130,  30),  # Orange
+    ( 40, 210, 210),  # Cyan
+    (220,  60, 160),  # Pink
+]
+
+_UFO_BODY = ( 40,  90, 200)
+_UFO_RIM  = ( 20,  50, 140)
+_UFO_DOME = ( 70, 130, 240)
+
+
+def _player_color(ship_id: str) -> tuple[int, int, int]:
+    return _PLAYER_COLORS[int(ship_id[:8], 16) % len(_PLAYER_COLORS)]
+
+
 # ── Raumschiff ────────────────────────────────────────────────────────────────
 
 def draw_ship(surf: pygame.Surface, ship: dict, is_me: bool,
@@ -60,28 +149,29 @@ def draw_ship(surf: pygame.Surface, ship: dict, is_me: bool,
     sw, sh = surf.get_size()
     sx, sy = w2s(ship["x"], ship["y"], cam_x, cam_y, sw, sh)
     angle  = ship["angle"]
-    fill   = WHITE if is_me else GRAY
-    stroke = DARK  if is_me else DIMGRAY
+
+    # UFO-Körper (Kreis, dreht sich nicht)
+    pygame.draw.circle(surf, _UFO_BODY, (sx, sy), 20)
+    pygame.draw.circle(surf, _UFO_RIM,  (sx, sy), 20, 2)
+
+    # Geschützturm (dreht sich mit aim_angle, Spielerfarbe)
+    pcolor = _player_color(ship["id"])
 
     def rot(pts):
         return rotate_pts(pts, angle, sx, sy)
 
-    # Delta-Dreieck (Nase zeigt in Zielrichtung)
-    body = rot([(20, 0), (-11, -13), (-11, 13)])
-    pygame.draw.polygon(surf, fill,   body)
-    pygame.draw.polygon(surf, stroke, body, 2)
+    body    = rot([(16, 0), (-9, -10), (-9, 10)])
+    cockpit = rot([( 9, 0), (-3,  -5), (-3,  5)])
+    engine  = rot([(-9, -4), (-14, -4), (-14, 4), (-9, 4)])
 
-    # Cockpit-Detail (dunkles Innendreieck)
-    cockpit = rot([(11, 0), (-4, -6), (-4, 6)])
-    pygame.draw.polygon(surf, stroke, cockpit)
-
-    # Triebwerks-Markierung (kleines Rechteck am Heck)
-    engine = rot([(-11, -5), (-16, -5), (-16, 5), (-11, 5)])
-    pygame.draw.polygon(surf, stroke, engine)
+    pygame.draw.polygon(surf, pcolor,   body)
+    pygame.draw.polygon(surf, _UFO_RIM, body, 1)
+    pygame.draw.polygon(surf, _UFO_RIM, cockpit)
+    pygame.draw.polygon(surf, _UFO_RIM, engine)
 
     # Lebensbalken
     bw, bh = 36, 4
-    bx, by = sx - bw // 2, sy - 32
+    bx, by = sx - bw // 2, sy - 36
     pygame.draw.rect(surf, (30, 30, 30), (bx, by, bw, bh))
     ratio   = ship["health"] / MAX_HP
     bar_col = HP_HIGH if ratio > 0.6 else (HP_MID if ratio > 0.3 else HP_LOW)
@@ -131,10 +221,15 @@ def draw_bullet(surf: pygame.Surface, b: dict,
                 cam_x: float, cam_y: float) -> None:
     sw, sh = surf.get_size()
     sx, sy = w2s(b["x"], b["y"], cam_x, cam_y, sw, sh)
-    glow = pygame.Surface((18, 18), pygame.SRCALPHA)
-    pygame.draw.circle(glow, (255, 255, 255, 28), (9, 9), 8)
-    surf.blit(glow, (sx - 9, sy - 9))
-    pygame.draw.circle(surf, WHITE, (sx, sy), 3)
+
+    # Äußere weiche Aura (groß, sehr transparent)
+    for radius, alpha in [(14, 18), (9, 40), (6, 80), (4, 140)]:
+        glow = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
+        pygame.draw.circle(glow, (255, 255, 255, alpha), (radius, radius), radius)
+        surf.blit(glow, (sx - radius, sy - radius))
+
+    # Harter weißer Kern
+    pygame.draw.circle(surf, (255, 255, 255), (sx, sy), 2)
 
 
 # ── Visuelle Effekte ──────────────────────────────────────────────────────────
