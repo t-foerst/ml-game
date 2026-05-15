@@ -135,8 +135,12 @@ _UFO_RIM  = ( 20,  50, 140)
 _UFO_DOME = ( 70, 130, 240)
 
 
+_color_registry: dict[str, int] = {}
+
 def _player_color(ship_id: str) -> tuple[int, int, int]:
-    return _PLAYER_COLORS[int(ship_id[:8], 16) % len(_PLAYER_COLORS)]
+    if ship_id not in _color_registry:
+        _color_registry[ship_id] = len(_color_registry) % len(_PLAYER_COLORS)
+    return _PLAYER_COLORS[_color_registry[ship_id]]
 
 
 # ── Raumschiff ────────────────────────────────────────────────────────────────
