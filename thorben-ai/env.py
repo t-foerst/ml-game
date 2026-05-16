@@ -1,8 +1,8 @@
 """Gymnasium-Umgebung für einen ml-game Bot.
 
 Observation (float32, shape=58):
-  [0:6]        self  – x/2000, y/2000, sin(angle), cos(angle), health/3, cooldown/0.5
-  [6:26]       enemies (4 max, zero-padded) – rel_x/2000, rel_y/2000, sin_a, cos_a, health/3
+  [0:6]        self  – x/2000, y/2000, sin(angle), cos(angle), health/1, cooldown/0.5
+  [6:26]       enemies (4 max, zero-padded) – rel_x/2000, rel_y/2000, sin_a, cos_a, health/1
   [26:58]      bullets (8 max, zero-padded) – rel_x/2000, rel_y/2000, sin_a, cos_a
 
 Action (float32, shape=6, all in [-1, 1]):
@@ -34,7 +34,7 @@ OBS_BULLET = 4
 OBS_SIZE   = OBS_SELF + N_ENEMIES * OBS_ENEMY + N_BULLETS * OBS_BULLET  # 58
 
 _NORM_POS = 2000.0
-_NORM_HP  = 3.0
+_NORM_HP  = 1.0
 _NORM_CD  = 0.5
 
 # ── Rewards ───────────────────────────────────────────────────────────────────

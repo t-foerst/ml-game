@@ -9,7 +9,7 @@ BULLET_SPEED = 620.0  # px/s
 BULLET_LIFETIME = 4.0  # seconds
 SHIP_RADIUS = 16.0  # Kollisionsradius px
 SHOOT_COOLDOWN = 0.5  # seconds
-SHIP_MAX_HEALTH = 3
+SHIP_MAX_HEALTH = 1
 RESPAWN_DELAY = 3.0  # seconds
 SPAWN_RANGE = 500.0  # ±px Spawn-Bereich (klein = Bots starten nah beieinander)
 
