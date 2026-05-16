@@ -11,7 +11,7 @@ SHIP_RADIUS = 16.0          # Kollisionsradius px
 SHOOT_COOLDOWN = 0.5        # seconds
 SHIP_MAX_HEALTH = 3
 RESPAWN_DELAY = 3.0         # seconds
-SPAWN_RANGE = 1000.0        # ±px Spawn-Bereich
+SPAWN_RANGE = 300.0         # ±px Spawn-Bereich (klein = Bots starten nah beieinander)
 
 
 class Bullet:
@@ -210,7 +210,8 @@ class Game:
                         self._pending_respawns.append(
                             (self._time + RESPAWN_DELAY, ship.id))
                     else:
-                        events.append({"type": "hit", "ship": ship.id})
+                        events.append({"type": "hit", "ship": ship.id,
+                                       "shooter": bullet.owner_id})
                     break
 
         # 4. Neue Geschosse einfügen (werden erst nächsten Tick bewegt)
