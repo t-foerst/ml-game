@@ -294,10 +294,27 @@ def draw_effect(
 
 
 def draw_crosshair(surf: pygame.Surface, mx: int, my: int) -> None:
-    S = 10
-    pygame.draw.line(surf, GRAY, (mx - S, my), (mx + S, my), 1)
-    pygame.draw.line(surf, GRAY, (mx, my - S), (mx, my + S), 1)
-    pygame.draw.circle(surf, GRAY, (mx, my), 6, 1)
+    GAP  = 6    # Abstand vom Mittelpunkt bis Strich-Anfang
+    LEN  = 18   # Strichlänge
+    R    = 14   # Kreis-Radius
+    W    = 2    # Strichbreite
+    C    = (220, 220, 220)
+    SH   = (0, 0, 0)
+
+    # Schatten (1px versetzt) für Kontrast auf hellem Hintergrund
+    pygame.draw.line(surf, SH, (mx - GAP - LEN + 1, my + 1), (mx - GAP + 1, my + 1), W)
+    pygame.draw.line(surf, SH, (mx + GAP + 1,       my + 1), (mx + GAP + LEN + 1, my + 1), W)
+    pygame.draw.line(surf, SH, (mx + 1, my - GAP - LEN + 1), (mx + 1, my - GAP + 1), W)
+    pygame.draw.line(surf, SH, (mx + 1, my + GAP + 1),       (mx + 1, my + GAP + LEN + 1), W)
+    pygame.draw.circle(surf, SH, (mx + 1, my + 1), R, 1)
+
+    # Fadenkreuz
+    pygame.draw.line(surf, C, (mx - GAP - LEN, my), (mx - GAP, my), W)
+    pygame.draw.line(surf, C, (mx + GAP,       my), (mx + GAP + LEN, my), W)
+    pygame.draw.line(surf, C, (mx, my - GAP - LEN), (mx, my - GAP), W)
+    pygame.draw.line(surf, C, (mx, my + GAP),       (mx, my + GAP + LEN), W)
+    pygame.draw.circle(surf, C, (mx, my), R, 1)
+    pygame.draw.circle(surf, C, (mx, my), 2)
 
 
 # ── Minimap ───────────────────────────────────────────────────────────────────

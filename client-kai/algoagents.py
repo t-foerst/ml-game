@@ -8,6 +8,7 @@ Interface:
 """
 
 import math
+import random
 
 DODGE_RANGE = 150.0  # px — Kugeln innerhalb dieser Distanz ausweichen
 
@@ -78,6 +79,12 @@ class OrbitDodgeAgent(AlgoAgent):
     """Kreist um den Agenten und weicht feindlichen Kugeln aus."""
     name = "Orbit + Dodge (Standardgegner)"
 
+    def __init__(self):
+        self._direction = 1  # +1 = CCW, -1 = CW
+
+    def reset(self) -> None:
+        self._direction = random.choice([-1, 1])
+
     def get_input(self, obs: dict) -> dict:
         enemies = obs.get("enemies", [])
         bullets = obs.get("bullets", [])
@@ -91,8 +98,8 @@ class OrbitDodgeAgent(AlgoAgent):
             dist = math.hypot(dx, dy)
             if dist > 1:
                 aim_angle = math.atan2(dy, dx)
-                orbit_x   = math.cos(aim_angle + math.pi / 2)
-                orbit_y   = math.sin(aim_angle + math.pi / 2)
+                orbit_x   = math.cos(aim_angle + self._direction * math.pi / 2)
+                orbit_y   = math.sin(aim_angle + self._direction * math.pi / 2)
 
         dodge_x, dodge_y = 0.0, 0.0
         for b in bullets:
@@ -120,14 +127,47 @@ class OrbitDodgeAgent(AlgoAgent):
         }
 
 
+# ── Cycle-Agent ───────────────────────────────────────────────────────────────
+
+class CycleAgent(AlgoAgent):
+    """Durchläuft alle AlgoAgents der Reihe nach — bei jedem reset() nächster."""
+    name = "Cycle (alle Agents nacheinander)"
+
+    EPISODES_PER_AGENT = 20
+
+    def __init__(self):
+        self._agents  = [cls() for cls in SINGLE_AGENTS]
+        self._index   = 0
+        self._count   = 0
+        self._current: AlgoAgent = self._agents[0]
+        self._current.reset()
+
+    def reset(self) -> None:
+        self._count += 1
+        if self._count > self.EPISODES_PER_AGENT:
+            self._count  = 1
+            self._index  = (self._index + 1) % len(self._agents)
+            self._current = self._agents[self._index]
+        self._current.reset()
+
+    @property
+    def active_name(self) -> str:
+        return self._current.name
+
+    def get_input(self, obs: dict) -> dict:
+        return self._current.get_input(obs)
+
+
 # ── Verfügbare Partner (Reihenfolge = Menü-Nummerierung) ─────────────────────
 
-ALGO_AGENTS: list[type[AlgoAgent]] = [
+SINGLE_AGENTS: list[type[AlgoAgent]] = [
     StillAgent,
     StillShooterAgent,
     LinearMoverAgent,
     OrbitDodgeAgent,
 ]
+
+ALGO_AGENTS: list[type[AlgoAgent]] = SINGLE_AGENTS + [CycleAgent]
 
 
 # ── Auswahl-Helfer ────────────────────────────────────────────────────────────

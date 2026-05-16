@@ -20,7 +20,7 @@ from algoagents import AlgoAgent, OrbitDodgeAgent
 
 # Observation
 N_ENEMIES = 1
-OBS_SIZE  = N_ENEMIES * 4 + 2  # rel_x, rel_y, delta_x, delta_y, sin(aim_diff), cos(aim_diff)
+OBS_SIZE  = N_ENEMIES * 4 + 2 + 3  # + nächste Kugel: rel_x, rel_y, angle
 
 # Steuerung
 ROTATE_SPEED = 0.15
@@ -38,10 +38,10 @@ R_SURVIVE    =  0.01
 SIGHT_RANGE        = 400.0   # px, Grenze zwischen Annähern und Orbit
 BLEND_WIDTH        = 300.0   # px, Übergangszone (±50 um SIGHT_RANGE)
 R_APPROACH_SCALE   = 0.01   # Reward pro px Annäherung
-R_TANGENTIAL_SCALE = 0.002   # Reward pro px Tangential-Bewegung
-R_AIM_PASSIVE      = 0.00    # 0.05 Max-Reward pro Schritt für richtigen Zielwinkel
-R_AIM_SHOOT        = 0.0     # 2.0 Zusatz-Reward wenn dabei auch geschossen wird
-AIM_CONE_DEG       = 30.0    # Winkel-Toleranz in Grad
+R_TANGENTIAL_SCALE = 0.0     # Orbit deaktiviert — Agent soll direkt angreifen
+R_AIM_PASSIVE      = 0.05    # Reward pro Schritt für richtigen Zielwinkel
+R_AIM_SHOOT        = 2.0     # Zusatz-Reward wenn dabei auch geschossen wird
+AIM_CONE_DEG       = 15.0    # Winkel-Toleranz in Grad (enger = präziser)
 R_JERK             = 0.1     # Penalty bei Bewegungsrichtungsänderung
 
 
@@ -70,6 +70,14 @@ def obs_to_vec(raw: dict, prev_enemies: list | None = None,
             vec += [0.0, 0.0, 0.0, 0.0]
 
     vec += [math.sin(aim_diff), math.cos(aim_diff)]
+
+    bullets = raw.get("bullets", [])
+    if bullets:
+        b = min(bullets, key=lambda b: b["rel_x"] ** 2 + b["rel_y"] ** 2)
+        vec += [b["rel_x"] / SPAWN_RANGE, b["rel_y"] / SPAWN_RANGE, b["angle"] / math.pi]
+    else:
+        vec += [0.0, 0.0, 0.0]
+
     return np.clip(np.array(vec, dtype=np.float32), -1.0, 1.0)
 
 
@@ -281,30 +289,26 @@ class MLGameEnv(gym.Env):
     # ── Debug-Output ───────────────────────────────────────────────────────────
 
     def _print_episode(self, result: str) -> None:
-        avg_dist     = self._ep_dist_sum / max(self._step_count, 1)
-        avg_rew      = (sum(self._reward_history) / len(self._reward_history)
-                        if self._reward_history else 0.0)
         n            = self._total_episodes
         win_rate     = self._wins     / n * 100 if n > 0 else 0.0
         timeout_rate = self._timeouts / n * 100 if n > 0 else 0.0
 
-        result_str = {"win": "TREFFER ✓", "loss": "GETROFFEN ✗", "timeout": "TIMEOUT —"}[result]
+        result_str  = {"win": "TREFFER ✓", "loss": "GETROFFEN ✗", "timeout": "TIMEOUT —"}[result]
+        agent_name  = getattr(self._algo_agent, "active_name", self._algo_agent.name)
 
         print(
             f"Ep {n:>5} | {result_str:<12} | "
             f"Steps: {self._step_count:>3} | "
-            f"Reward: {self._ep_reward:>6.2f} | "
-            f"Ø Reward(100): {avg_rew:>6.2f} | "
             f"Timeout: {timeout_rate:>5.1f}% | "
-            f"Ø Distanz: {avg_dist:>6.0f} | "
-            f"Siege: {win_rate:>5.1f}%"
+            f"Siege: {win_rate:>5.1f}% | "
+            f"Gegner: {agent_name}"
         )
 
         if n % 100 == 0:
             print(f"\n{'='*60}")
             print(f"  Zusammenfassung nach {n} Episoden")
             print(f"  Siege: {self._wins}  |  Niederlagen: {self._losses}  |  Timeouts: {self._timeouts}")
-            print(f"  Timeout: {timeout_rate:.1f}%  |  Siegrate: {win_rate:.1f}%  |  Ø Reward(100): {avg_rew:.2f}")
+            print(f"  Timeout: {timeout_rate:.1f}%  |  Siegrate: {win_rate:.1f}%")
             print(f"{'='*60}\n")
 
 

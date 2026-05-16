@@ -140,7 +140,8 @@ class LiveGameEnv(gym.Env):
             self._my_id = msg["player_id"]
             print(f"[live] Bot-ID: {self._my_id}")
         elif mtype == "observation":
-            self._obs_q.put(obs_to_vec(msg, self._prev_enemies, self._aim_angle))
+            server_angle = msg.get("self", {}).get("angle", self._aim_angle)
+            self._obs_q.put(obs_to_vec(msg, self._prev_enemies, server_angle))
             self._prev_enemies = msg.get("enemies", [])
         elif mtype == "events":
             for ev in msg.get("events", []):
@@ -212,21 +213,91 @@ def train_live(server_url: str) -> None:
     save(model, config)
 
 
+# ── Nur spielen (kein Training) ───────────────────────────────────────────────
+
+async def _play_loop(server_url: str, model) -> None:
+    bot_url = f"{server_url}?type=bot"
+    prev_enemies = None
+    my_id        = None
+
+    while True:
+        try:
+            async with websockets.connect(bot_url) as ws:
+                print(f"[live] Verbunden (kein Training) — {bot_url}")
+                async for raw in ws:
+                    msg   = json.loads(raw)
+                    mtype = msg.get("type")
+                    if mtype == "welcome":
+                        my_id = msg["player_id"]
+                        print(f"[live] Bot-ID: {my_id}")
+                    elif mtype == "observation":
+                        # Server-Winkel als Ground-Truth — kein lokales Tracking
+                        aim_angle    = msg.get("self", {}).get("angle", 0.0)
+                        obs          = obs_to_vec(msg, prev_enemies, aim_angle)
+                        prev_enemies = msg.get("enemies", [])
+                        action, _    = model.predict(obs, deterministic=False)
+                        inp, _       = action_to_input(action, aim_angle)
+                        await ws.send(json.dumps({"type": "input", **inp}))
+                    elif mtype == "events":
+                        for ev in msg.get("events", []):
+                            if ev.get("type") == "kill":
+                                if ev.get("victim") == my_id:
+                                    print("[live] Abgeschossen!")
+                                    prev_enemies = None
+                                elif ev.get("killer") == my_id:
+                                    print("[live] Kill!")
+        except KeyboardInterrupt:
+            return
+        except Exception as e:
+            print(f"[live] Verbindungsfehler: {e} — verbinde neu...")
+            await asyncio.sleep(2)
+
+
+def play_live(server_url: str) -> None:
+    model, config = load()
+    if model is None:
+        print("[live] Kein Model gefunden — zuerst trainieren (agent.py).")
+        return
+    print(f"[live] Spiele ohne Training — {config['total_timesteps_trained']:,} Steps trainiert.")
+    try:
+        asyncio.run(_play_loop(server_url, model))
+    except KeyboardInterrupt:
+        print("\n[live] Beendet.")
+
+
 # ── Einstiegspunkt ────────────────────────────────────────────────────────────
 
-def _choose_server() -> str:
-    print("\nServer auswählen:")
-    for i, (name, url) in enumerate(SERVERS):
-        print(f"  [{i + 1}] {name}  ({url})")
-    try:
-        idx = int(input("> ").strip()) - 1
-        if 0 <= idx < len(SERVERS):
-            return SERVERS[idx][1]
-    except (ValueError, EOFError):
-        pass
-    return SERVERS[0][1]
+MENU = [
+    ("Oeffentlicher Server",              SERVERS[1][1], False),
+    ("Lokaler Server",                    SERVERS[0][1], False),
+    ("Oeffentlicher Server + Training",   SERVERS[1][1], True),
+    ("Lokaler Server    + Training",      SERVERS[0][1], True),
+]
+
+
+def _choose() -> tuple[str, bool]:
+    print("\nModus auswählen:")
+    for i, (label, url, train) in enumerate(MENU):
+        suffix = f"  ({url})"
+        print(f"  [{i + 1}] {label}{suffix}")
+    while True:
+        try:
+            idx = int(input("> ").strip()) - 1
+            if 0 <= idx < len(MENU):
+                _, url, train = MENU[idx]
+                return url, train
+        except (ValueError, EOFError):
+            pass
+        print(f"  Bitte 1–{len(MENU)} eingeben.")
 
 
 if __name__ == "__main__":
-    url = sys.argv[1] if len(sys.argv) > 1 else _choose_server()
-    train_live(url)
+    if len(sys.argv) > 1:
+        url, do_train = sys.argv[1], False
+    else:
+        url, do_train = _choose()
+
+    if do_train:
+        train_live(url)
+    else:
+        play_live(url)
