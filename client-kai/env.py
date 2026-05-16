@@ -16,11 +16,11 @@ from gymnasium import spaces
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "server"))
 from game import Game, SHOOT_COOLDOWN, SPAWN_RANGE, BULLET_SPEED
+from algoagents import AlgoAgent, OrbitDodgeAgent
 
 # Observation
 N_ENEMIES = 1
-N_BULLETS = 3
-OBS_SIZE  = N_ENEMIES * 4 + N_BULLETS * 3  # 4 + 9 = 13
+OBS_SIZE  = N_ENEMIES * 4 + 2  # rel_x, rel_y, delta_x, delta_y, sin(aim_diff), cos(aim_diff)
 
 # Steuerung
 ROTATE_SPEED = 0.15
@@ -30,17 +30,14 @@ STEP_DT      = 1 / 20
 MAX_STEPS = 300
 
 # Rewards
-R_HIT_LANDED =  10.0
+R_HIT_LANDED =   7.0
 R_HIT_TAKEN  =  -5.0
 R_SURVIVE    =  0.01
-
-# Dodge-Schwelle für Gegner
-DODGE_RANGE  = 150.0
 
 # Annäherungs-/Orbit-Übergang
 SIGHT_RANGE        = 300.0   # px, Grenze zwischen Annähern und Orbit
 BLEND_WIDTH        = 100.0   # px, Übergangszone (±50 um SIGHT_RANGE)
-R_APPROACH_SCALE   = 0.002   # Reward pro px Annäherung
+R_APPROACH_SCALE   = 0.02   # Reward pro px Annäherung
 R_TANGENTIAL_SCALE = 0.002   # Reward pro px Tangential-Bewegung
 R_AIM_PASSIVE      = 0.05    # Max-Reward pro Schritt für richtigen Zielwinkel
 R_AIM_SHOOT        = 2.0     # Zusatz-Reward wenn dabei auch geschossen wird
@@ -48,12 +45,14 @@ AIM_CONE_DEG       = 30.0    # Winkel-Toleranz in Grad
 R_JERK             = 0.1     # Penalty bei Bewegungsrichtungsänderung
 
 
-def obs_to_vec(raw: dict, prev_enemies: list | None = None) -> np.ndarray:
-    """Feinde: rel_x, rel_y, delta_x, delta_y — Kugeln: rel_x, rel_y, angle"""
+def obs_to_vec(raw: dict, prev_enemies: list | None = None,
+               aim_angle: float = 0.0) -> np.ndarray:
+    """[rel_x, rel_y, delta_x, delta_y, sin(aim_diff), cos(aim_diff)]"""
     vec = []
 
     enemies = sorted(raw["enemies"],
                      key=lambda e: e["rel_x"] ** 2 + e["rel_y"] ** 2)
+    aim_diff = 0.0
     for i in range(N_ENEMIES):
         if i < len(enemies):
             e = enemies[i]
@@ -65,19 +64,12 @@ def obs_to_vec(raw: dict, prev_enemies: list | None = None) -> np.ndarray:
             else:
                 dx, dy = 0.0, 0.0
             vec += [rx, ry, dx, dy]
+            if i == 0:
+                aim_diff = aim_angle - math.atan2(e["rel_y"], e["rel_x"])
         else:
             vec += [0.0, 0.0, 0.0, 0.0]
 
-    bullets = sorted(raw["bullets"],
-                     key=lambda b: b["rel_x"] ** 2 + b["rel_y"] ** 2)
-    for i in range(N_BULLETS):
-        if i < len(bullets):
-            b = bullets[i]
-            vec += [b["rel_x"] / SPAWN_RANGE, b["rel_y"] / SPAWN_RANGE,
-                    b["angle"] / math.pi]
-        else:
-            vec += [0.0, 0.0, 0.0]
-
+    vec += [math.sin(aim_diff), math.cos(aim_diff)]
     return np.clip(np.array(vec, dtype=np.float32), -1.0, 1.0)
 
 
@@ -98,11 +90,12 @@ def action_to_input(action, aim_angle: float) -> tuple[dict, float]:
 class MLGameEnv(gym.Env):
     metadata = {"render_modes": []}
 
-    def __init__(self, debug: bool = False):
+    def __init__(self, debug: bool = False, algo_agent: AlgoAgent | None = None):
         super().__init__()
         self.action_space      = spaces.MultiDiscrete([2, 2, 2, 2, 2, 3])
         self.observation_space = spaces.Box(-1., 1., (OBS_SIZE,), np.float32)
         self.debug             = debug
+        self._algo_agent       = algo_agent if algo_agent is not None else OrbitDodgeAgent()
 
         self._game         = Game()
         self._agent_id     = "agent"
@@ -143,6 +136,7 @@ class MLGameEnv(gym.Env):
         self._prev_movement  = None
         self._step_count     = 0
         self._episode_num   += 1
+        self._algo_agent.reset()
 
         self._ep_reward      = 0.0
         self._ep_hits_landed = 0
@@ -151,7 +145,7 @@ class MLGameEnv(gym.Env):
         self._ep_dist_sum    = 0.0
 
         raw = self._game.get_observation(self._agent_id)
-        return obs_to_vec(raw, None), {}
+        return obs_to_vec(raw, None, self._aim_angle), {}
 
     def step(self, action):
         self._step_count += 1
@@ -205,23 +199,24 @@ class MLGameEnv(gym.Env):
                     tangential = abs(-move_x * toward_y + move_y * toward_x)
                     reward += tangential * R_TANGENTIAL_SCALE * blend_near
 
-                # 3) Ziel-Reward mit Vorhalt
-                opp_vel_x = (opp.x - self._prev_opp_pos[0]) / STEP_DT
-                opp_vel_y = (opp.y - self._prev_opp_pos[1]) / STEP_DT
-                lead_time = dist / BULLET_SPEED
-                lead_dx   = dx_eo + opp_vel_x * lead_time
-                lead_dy   = dy_eo + opp_vel_y * lead_time
-                ideal     = math.atan2(lead_dy, lead_dx)
-                diff_rad  = abs(math.atan2(
-                    math.sin(self._aim_angle - ideal),
-                    math.cos(self._aim_angle - ideal),
-                ))
-                diff_deg  = math.degrees(diff_rad)
-                if diff_deg < AIM_CONE_DEG:
-                    factor  = 1.0 - diff_deg / AIM_CONE_DEG
-                    reward += factor * R_AIM_PASSIVE          # jeden Schritt
-                    if shoot:
-                        reward += factor * R_AIM_SHOOT        # Bonus beim Schuss
+                # 3) Ziel-Reward mit Vorhalt — nur im Nahbereich
+                if blend_near > 0:
+                    opp_vel_x = (opp.x - self._prev_opp_pos[0]) / STEP_DT
+                    opp_vel_y = (opp.y - self._prev_opp_pos[1]) / STEP_DT
+                    lead_time = dist / BULLET_SPEED
+                    lead_dx   = dx_eo + opp_vel_x * lead_time
+                    lead_dy   = dy_eo + opp_vel_y * lead_time
+                    ideal     = math.atan2(lead_dy, lead_dx)
+                    diff_rad  = abs(math.atan2(
+                        math.sin(self._aim_angle - ideal),
+                        math.cos(self._aim_angle - ideal),
+                    ))
+                    diff_deg  = math.degrees(diff_rad)
+                    if diff_deg < AIM_CONE_DEG:
+                        factor  = (1.0 - diff_deg / AIM_CONE_DEG) * blend_near
+                        reward += factor * R_AIM_PASSIVE          # jeden Schritt
+                        if shoot:
+                            reward += factor * R_AIM_SHOOT        # Bonus beim Schuss
 
             self._prev_agent_pos = (agent.x, agent.y)
             if opp.alive:
@@ -276,7 +271,7 @@ class MLGameEnv(gym.Env):
 
         raw = self._game.get_observation(self._agent_id)
         if raw:
-            obs = obs_to_vec(raw, self._prev_enemies)
+            obs = obs_to_vec(raw, self._prev_enemies, self._aim_angle)
             self._prev_enemies = raw["enemies"]
         else:
             obs = np.zeros(OBS_SIZE, dtype=np.float32)
@@ -316,48 +311,9 @@ class MLGameEnv(gym.Env):
     # ── Gegner ────────────────────────────────────────────────────────────────
 
     def _apply_opponent(self) -> None:
-        """Orbit + Dodge Gegner."""
-        agent = self._game.ships.get(self._agent_id)
-        opp   = self._game.ships.get(self._opp_id)
-        if not agent or not opp or not opp.alive:
+        opp = self._game.ships.get(self._opp_id)
+        if not opp or not opp.alive:
             return
-
-        dx  = agent.x - opp.x
-        dy  = agent.y - opp.y
-        aim = math.atan2(dy, dx)
-
-        # Orbit: 90° versetzt zur Ziellinie
-        orbit_x = math.cos(aim + math.pi / 2)
-        orbit_y = math.sin(aim + math.pi / 2)
-
-        # Dodge: ausweichen vor feindlichen Kugeln
-        dodge_x, dodge_y = 0.0, 0.0
-        for b in self._game.bullets.values():
-            if b.owner_id == opp.id:
-                continue
-            bx = b.x - opp.x
-            by = b.y - opp.y
-            if bx ** 2 + by ** 2 > DODGE_RANGE ** 2:
-                continue
-            bdist = math.hypot(bx, by)
-            if bdist < 1:
-                continue
-            bdir_x = math.cos(b.angle)
-            bdir_y = math.sin(b.angle)
-            dot = (bx * bdir_x + by * bdir_y) / bdist
-            if dot < -0.7:  # Kugel fliegt auf uns zu
-                dodge_x -= bdir_y
-                dodge_y += bdir_x
-
-        # Bewegung kombinieren
-        move_x = orbit_x + dodge_x
-        move_y = orbit_y + dodge_y
-
-        self._game.set_input(self._opp_id, {
-            "up":        move_y < -0.3,
-            "down":      move_y >  0.3,
-            "left":      move_x < -0.3,
-            "right":     move_x >  0.3,
-            "shoot":     True,
-            "aim_angle": aim,
-        })
+        obs = self._game.get_observation(self._opp_id)
+        if obs:
+            self._game.set_input(self._opp_id, self._algo_agent.get_input(obs))

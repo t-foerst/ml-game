@@ -140,7 +140,7 @@ class LiveGameEnv(gym.Env):
             self._my_id = msg["player_id"]
             print(f"[live] Bot-ID: {self._my_id}")
         elif mtype == "observation":
-            self._obs_q.put(obs_to_vec(msg, self._prev_enemies))
+            self._obs_q.put(obs_to_vec(msg, self._prev_enemies, self._aim_angle))
             self._prev_enemies = msg.get("enemies", [])
         elif mtype == "events":
             for ev in msg.get("events", []):

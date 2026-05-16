@@ -12,6 +12,7 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 
 from env import MLGameEnv
+from algoagents import choose_agent
 
 MODELS_DIR          = Path(__file__).parent / "models"
 MODEL_FILE          = MODELS_DIR / "ppo_model"   # .zip wird von SB3 ergänzt
@@ -87,8 +88,10 @@ class _SaveCallback(BaseCallback):
 # ── Training ──────────────────────────────────────────────────────────────────
 
 def train() -> None:
+    algo_agent = choose_agent()
+    print(f"[agent] Gegner: {algo_agent.name}")
     model, config = load()
-    env = MLGameEnv(debug=True)
+    env = MLGameEnv(debug=True, algo_agent=algo_agent)
 
     if model is None:
         model = PPO(
@@ -105,6 +108,7 @@ def train() -> None:
         )
     else:
         model.set_env(env)
+        print(f"[agent] Fortsetzung ab {config['total_timesteps_trained']:,} Steps")
 
     print(f"[agent] Training startet — Ziel: +{STEPS_PER_SESSION:,} Steps")
     callback = _SaveCallback(config, SAVE_EVERY)

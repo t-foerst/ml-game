@@ -42,29 +42,23 @@ def _load_model():
         return None
 
 
-# ── Observation → Vektor ──────────────────────────────────────────────────────
-
-def _to_vec(observation: dict) -> np.ndarray:
-    from env import obs_to_vec
-    return obs_to_vec(observation)
-
-
 # ── KI-Entscheidung ───────────────────────────────────────────────────────────
 
 _model     = _load_model()
 _aim_angle = 0.0
+_prev_enemies: list | None = None
 
 
 def decide(observation: dict) -> dict | None:
-    global _aim_angle
+    global _aim_angle, _prev_enemies
 
     if _model is None:
         return None
 
-    obs             = _to_vec(observation)
+    from env import obs_to_vec, action_to_input
+    obs             = obs_to_vec(observation, _prev_enemies, _aim_angle)
+    _prev_enemies   = observation.get("enemies", [])
     action, _       = _model.predict(obs, deterministic=True)
-
-    from env import action_to_input
     inp, _aim_angle = action_to_input(action, _aim_angle)
     return inp
 
