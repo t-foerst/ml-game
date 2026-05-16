@@ -28,6 +28,19 @@ services:
 docker compose up -d
 ```
 
+Umgebungsvariablen:
+
+| Variable | Standard | Bedeutung |
+|----------|----------|-----------|
+| `SPEED_MULTIPLIER` | `1.0` | Simulationsgeschwindigkeit (z. B. `10.0` für schnelles ML-Training) |
+| `BROADCAST_RATE` | `20` | State-Senderate in Hz |
+
+Beispiel für 10× schnelles Training:
+
+```bash
+SPEED_MULTIPLIER=10 docker compose up -d
+```
+
 ---
 
 ## Client
@@ -63,17 +76,19 @@ python main.py ws://localhost:3001/ws   # Menü überspringen
 
 ## ML-Bot-Interface
 
-Ein Bot verbindet sich per WebSocket mit dem Query-Parameter `?type=bot`:
+Ein Bot verbindet sich per WebSocket mit den Query-Parametern `type=bot` und optional `room=<name>`:
 
 ```
-ws://localhost:3001/ws?type=bot
+ws://localhost:3001/ws?type=bot&room=training-1
 ```
+
+Jeder Room ist eine vollständig isolierte Spielinstanz. Rooms werden automatisch erstellt und nach 60 s ohne Spieler wieder gelöscht (außer `default`). Aktive Rooms sind unter `GET /rooms` sichtbar.
 
 ### Nachrichten vom Server
 
 **`welcome`** – direkt nach Verbindungsaufbau:
 ```json
-{ "type": "welcome", "player_id": "<uuid>", "is_bot": true }
+{ "type": "welcome", "player_id": "<uuid>", "is_bot": true, "room": "training-1" }
 ```
 
 **`state`** – Spielzustand, ~20 Hz:

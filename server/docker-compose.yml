@@ -4,3 +4,5 @@ services:
     ports:
       - "3001:3001"
     restart: unless-stopped
+    environment:
+      - SPEED_MULTIPLIER=10
