@@ -35,16 +35,16 @@ from opponent import OpponentBot
 # ── Konfiguration ─────────────────────────────────────────────────────────────
 
 SERVER_URL     = os.environ.get("SERVER_URL",  "ws://localhost:3001/ws")
-N_ROOMS        = int(os.environ.get("N_ROOMS",       "8"))
+N_ROOMS        = int(os.environ.get("N_ROOMS",       "4"))
 TOTAL_STEPS    = int(os.environ.get("TOTAL_STEPS",   "5_000_000"))
 RESUME         = os.environ.get("RESUME", "0") == "1" or "--resume" in sys.argv
 
 CHECKPOINT_DIR = Path("checkpoints")
 TB_LOG_DIR     = Path("tb_logs")
 
-SELFPLAY_FREQ  = 25_000   # Schritte zwischen Checkpoint-Saves für Selbstspiel
-POOL_SIZE      = 8        # Maximale Checkpoints im Selbstspiel-Pool
-MAX_STEPS_EP   = 2000     # Maximale Schritte pro Episode
+SELFPLAY_FREQ  = 20_000   # Schritte zwischen Checkpoint-Saves für Selbstspiel
+POOL_SIZE      = 5        # Maximale Checkpoints im Selbstspiel-Pool
+MAX_STEPS_EP   = 500      # Maximale Schritte pro Episode (~8s Spielzeit)
 
 
 # ── Selbstspiel-Callback ──────────────────────────────────────────────────────

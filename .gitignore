@@ -29,3 +29,7 @@ htmlcov/
 # Environment
 .env
 .env.local
+
+# ML Training artifacts
+thorben-ai/checkpoints/
+thorben-ai/tb_logs/

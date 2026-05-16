@@ -40,6 +40,7 @@ _NORM_CD  = 0.5
 # ── Rewards ───────────────────────────────────────────────────────────────────
 
 R_KILL  =  5.0
+R_HIT   =  1.0   # pro Treffer auf Gegner (Kill gibt zusätzlich R_KILL)
 R_DEATH = -2.0
 
 # ── Hilfs-Funktionen (auch von opponent.py genutzt) ──────────────────────────
@@ -146,7 +147,10 @@ class MlGameEnv(gym.Env):
 
             elif kind == "events":
                 for ev in msg.get("events", []):
-                    if ev["type"] == "kill":
+                    if ev["type"] == "hit":
+                        if ev.get("shooter") == self._player_id:
+                            self._reward_acc += R_HIT
+                    elif ev["type"] == "kill":
                         if ev.get("killer") == self._player_id:
                             self._reward_acc += R_KILL
                         if ev.get("victim") == self._player_id:
