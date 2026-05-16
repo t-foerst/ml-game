@@ -1,17 +1,17 @@
 import math
-import uuid
 import random
+import uuid
 from typing import Optional
 
 TICK_RATE = 60
-SHIP_SPEED = 220.0          # px/s (WASD, Weltkoordinaten)
-BULLET_SPEED = 620.0        # px/s
-BULLET_LIFETIME = 4.0       # seconds
-SHIP_RADIUS = 16.0          # Kollisionsradius px
-SHOOT_COOLDOWN = 0.5        # seconds
+SHIP_SPEED = 220.0  # px/s (WASD, Weltkoordinaten)
+BULLET_SPEED = 620.0  # px/s
+BULLET_LIFETIME = 4.0  # seconds
+SHIP_RADIUS = 16.0  # Kollisionsradius px
+SHOOT_COOLDOWN = 0.5  # seconds
 SHIP_MAX_HEALTH = 3
-RESPAWN_DELAY = 3.0         # seconds
-SPAWN_RANGE = 300.0         # ±px Spawn-Bereich (klein = Bots starten nah beieinander)
+RESPAWN_DELAY = 3.0  # seconds
+SPAWN_RANGE = 500.0  # ±px Spawn-Bereich (klein = Bots starten nah beieinander)
 
 
 class Bullet:
@@ -33,8 +33,13 @@ class Bullet:
         return self.age < BULLET_LIFETIME
 
     def serialize(self) -> dict:
-        return {"id": self.id, "owner_id": self.owner_id,
-                "x": self.x, "y": self.y, "angle": self.angle}
+        return {
+            "id": self.id,
+            "owner_id": self.owner_id,
+            "x": self.x,
+            "y": self.y,
+            "angle": self.angle,
+        }
 
 
 class Ship:
@@ -42,26 +47,30 @@ class Ship:
         self.id = ship_id
         self.score = 0
         self.input: dict = {
-            "up": False, "down": False, "left": False, "right": False,
-            "shoot": False, "aim_angle": 0.0,
+            "up": False,
+            "down": False,
+            "left": False,
+            "right": False,
+            "shoot": False,
+            "aim_angle": 0.0,
         }
         self._respawn()
 
     def _respawn(self) -> None:
         self.x = (random.random() - 0.5) * SPAWN_RANGE * 2
         self.y = (random.random() - 0.5) * SPAWN_RANGE * 2
-        self.angle = random.uniform(0.0, math.pi * 2)   # Startrichtung zufällig
+        self.angle = random.uniform(0.0, math.pi * 2)  # Startrichtung zufällig
         self.health = SHIP_MAX_HEALTH
         self.alive = True
         self.shoot_cooldown = 0.0
 
     def apply_input(self, inp: dict) -> None:
         self.input = {
-            "up":        bool(inp.get("up")),
-            "down":      bool(inp.get("down")),
-            "left":      bool(inp.get("left")),
-            "right":     bool(inp.get("right")),
-            "shoot":     bool(inp.get("shoot")),
+            "up": bool(inp.get("up")),
+            "down": bool(inp.get("down")),
+            "left": bool(inp.get("left")),
+            "right": bool(inp.get("right")),
+            "shoot": bool(inp.get("shoot")),
             "aim_angle": float(inp.get("aim_angle", self.angle)),
         }
 
@@ -74,10 +83,14 @@ class Ship:
 
         # Freie WASD-Bewegung in Weltkoordinaten
         vx, vy = 0.0, 0.0
-        if self.input["up"]:    vy -= SHIP_SPEED
-        if self.input["down"]:  vy += SHIP_SPEED
-        if self.input["left"]:  vx -= SHIP_SPEED
-        if self.input["right"]: vx += SHIP_SPEED
+        if self.input["up"]:
+            vy -= SHIP_SPEED
+        if self.input["down"]:
+            vy += SHIP_SPEED
+        if self.input["left"]:
+            vx -= SHIP_SPEED
+        if self.input["right"]:
+            vx += SHIP_SPEED
         # Diagonalbewegung normalisieren (konstante Geschwindigkeit)
         if vx != 0.0 and vy != 0.0:
             vx *= 0.7071067811865476
@@ -106,9 +119,13 @@ class Ship:
 
     def serialize(self) -> dict:
         return {
-            "id": self.id, "x": self.x, "y": self.y,
-            "angle": self.angle, "health": self.health,
-            "alive": self.alive, "score": self.score,
+            "id": self.id,
+            "x": self.x,
+            "y": self.y,
+            "angle": self.angle,
+            "health": self.health,
+            "alive": self.alive,
+            "score": self.score,
         }
 
     def get_observation(self, all_ships: list, bullets: list) -> dict:
@@ -120,18 +137,27 @@ class Ship:
           aim_angle              – float – Zielwinkel in Radiant
         """
         enemies = [
-            {"rel_x": s.x - self.x, "rel_y": s.y - self.y,
-             "angle": s.angle, "health": s.health}
-            for s in all_ships if s.id != self.id and s.alive
+            {
+                "rel_x": s.x - self.x,
+                "rel_y": s.y - self.y,
+                "angle": s.angle,
+                "health": s.health,
+            }
+            for s in all_ships
+            if s.id != self.id and s.alive
         ]
         enemy_bullets = [
             {"rel_x": b.x - self.x, "rel_y": b.y - self.y, "angle": b.angle}
-            for b in bullets if b.owner_id != self.id
+            for b in bullets
+            if b.owner_id != self.id
         ]
         return {
             "self": {
-                "x": self.x, "y": self.y, "angle": self.angle,
-                "health": self.health, "shoot_cooldown": self.shoot_cooldown,
+                "x": self.x,
+                "y": self.y,
+                "angle": self.angle,
+                "health": self.health,
+                "shoot_cooldown": self.shoot_cooldown,
             },
             "enemies": enemies,
             "bullets": enemy_bullets,
@@ -205,13 +231,20 @@ class Game:
                         killer = self.ships.get(bullet.owner_id)
                         if killer:
                             killer.score += 1
-                        events.append({"type": "kill",
-                                       "killer": bullet.owner_id, "victim": ship.id})
+                        events.append(
+                            {
+                                "type": "kill",
+                                "killer": bullet.owner_id,
+                                "victim": ship.id,
+                            }
+                        )
                         self._pending_respawns.append(
-                            (self._time + RESPAWN_DELAY, ship.id))
+                            (self._time + RESPAWN_DELAY, ship.id)
+                        )
                     else:
-                        events.append({"type": "hit", "ship": ship.id,
-                                       "shooter": bullet.owner_id})
+                        events.append(
+                            {"type": "hit", "ship": ship.id, "shooter": bullet.owner_id}
+                        )
                     break
 
         # 4. Neue Geschosse einfügen (werden erst nächsten Tick bewegt)
@@ -223,7 +256,7 @@ class Game:
     def get_state(self) -> dict:
         return {
             "tick": self.tick,
-            "ships":   [s.serialize() for s in self.ships.values()],
+            "ships": [s.serialize() for s in self.ships.values()],
             "bullets": [b.serialize() for b in self.bullets.values()],
         }
 
