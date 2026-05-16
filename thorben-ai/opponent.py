@@ -3,6 +3,10 @@
 Läuft in einem Daemon-Thread, verbindet sich mit dem Server als Bot und
 spielt mit der aktuell geladenen Policy. Wird vom SelfPlayCallback periodisch
 auf einen neuen Checkpoint aktualisiert.
+
+Episode-Sync: Wenn der Trainings-Bot eine Episode beendet (disconnect + reconnect),
+schickt der Server ein "join"-Event. Der Opponent erkennt das und reconnectet
+ebenfalls → beide Schiffe spawnen neu in der Mitte.
 """
 
 import json
@@ -17,6 +21,10 @@ from env import parse_obs, build_input, OBS_SIZE
 
 def _random_action() -> np.ndarray:
     return np.random.uniform(-1.0, 1.0, size=(6,)).astype(np.float32)
+
+
+class _EpisodeEnd(Exception):
+    """Signalisiert dass der Trainings-Bot reconnectet ist → Opponent soll auch neu spawnen."""
 
 
 class OpponentBot:
@@ -55,11 +63,15 @@ class OpponentBot:
             try:
                 with ws_connect(self._url, open_timeout=15) as ws:
                     self._play(ws)
+            except _EpisodeEnd:
+                pass          # sofort reconnecten, kein sleep
             except Exception:
                 if not self._stop.is_set():
                     time.sleep(2.0)
 
     def _play(self, ws) -> None:
+        my_id: Optional[str] = None
+
         while not self._stop.is_set():
             try:
                 raw = ws.recv(timeout=1.0)
@@ -71,7 +83,15 @@ class OpponentBot:
             msg  = json.loads(raw)
             kind = msg.get("type")
 
-            if kind == "observation":
+            if kind == "welcome":
+                my_id = msg.get("player_id")
+
+            elif kind == "join":
+                # Anderer Spieler hat reconnectet → Trainings-Bot startete neue Episode
+                if msg.get("player_id") != my_id:
+                    raise _EpisodeEnd()
+
+            elif kind == "observation":
                 obs = parse_obs(msg)
                 with self._lock:
                     model = self._model

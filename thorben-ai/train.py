@@ -21,6 +21,7 @@ TensorBoard:
 import os
 import random
 import sys
+import threading
 import time
 from multiprocessing import freeze_support
 from pathlib import Path
@@ -34,7 +35,7 @@ from stable_baselines3.common.vec_env import SubprocVecEnv
 # ── Konfiguration ─────────────────────────────────────────────────────────────
 
 SERVER_URL = os.environ.get("SERVER_URL", "ws://localhost:3001/ws")
-N_ROOMS = int(os.environ.get("N_ROOMS", "2"))
+N_ROOMS = int(os.environ.get("N_ROOMS", "1"))
 TOTAL_STEPS = int(os.environ.get("TOTAL_STEPS", "200_000"))
 RESUME = os.environ.get("RESUME", "0") == "1" or "--resume" in sys.argv
 
@@ -78,13 +79,23 @@ class SelfPlayCallback(BaseCallback):
         if len(self._pool) > POOL_SIZE:
             self._pool.pop(0)
 
-        for opp in self.opponents:
-            ckpt = random.choice(self._pool)
+        # Modell im Hintergrund laden – blockiert weder Rollout noch Gegner-Threads
+        ckpt = random.choice(self._pool)
+        opponents = list(self.opponents)
+        verbose = bool(self.verbose)
+
+        def _load_and_update() -> None:
             try:
-                opp.update_model(PPO.load(ckpt, device="cpu"))
+                model = PPO.load(ckpt, device="cpu")
+                for opp in opponents:
+                    opp.update_model(model)
+                if verbose:
+                    print(f"[SelfPlay] Gegner aktualisiert → {Path(ckpt).name}")
             except Exception as e:
-                if self.verbose:
+                if verbose:
                     print(f"[SelfPlay] Ladefehler {ckpt}: {e}")
+
+        threading.Thread(target=_load_and_update, daemon=True).start()
 
         if self.verbose:
             print(
