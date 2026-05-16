@@ -1,24 +1,34 @@
 #!/usr/bin/env python3
 """ml-game Desktop-Client.
 
-Steuerung:
+Steuerung (Spieler):
   WASD / Pfeiltasten : Bewegen (unabhaengig von Zielrichtung)
   Maus               : Zielrichtung
   LMB / Leertaste    : Schiessen
   ESC                : Zurueck ins Menue
 
+Steuerung (Zuschauer):
+  WASD / Pfeiltasten : Kamera verschieben
+  ESC                : Zurueck ins Menue
+
 Server-URL als optionales Argument (ueberspringt das Menue):
   python main.py ws://localhost:3001/ws
+  python main.py ws://localhost:3001/ws myroom
+  python main.py ws://localhost:3001/ws myroom spectate
 """
 
+import json
 import math
 import sys
+import threading
+import urllib.request
 from typing import Optional
+from urllib.parse import urlparse, urlunparse
 
 import pygame
 
 from constants import BG, GRID, DARK, DIMGRAY, WHITE, GRAY, WIN_W, WIN_H, FPS, SERVERS
-from network import state_q, input_q, start_network
+from network import state_q, input_q, start_network, stop_network
 from renderer import (
     draw_background, draw_nebula,
     draw_grid, draw_ship, draw_bullet, draw_effect,
@@ -27,8 +37,8 @@ from renderer import (
 )
 from sound import SoundManager
 
-SHOOT_COOLDOWN = 0.5  # muss mit server/game.py übereinstimmen
-
+SPECTATOR_CAM_SPEED = 500.0
+SHOOT_COOLDOWN      = 0.5    # muss mit server/game.py übereinstimmen
 
 # ── Spielzustand (Session-weit) ───────────────────────────────────────────────
 _state:  dict          = {"tick": 0, "ships": [], "bullets": []}
@@ -38,6 +48,7 @@ _status: str           = "Verbinde..."
 
 def _reset_state() -> None:
     global _my_id, _status
+    stop_network()
     _state.clear()
     _state.update({"tick": 0, "ships": [], "bullets": []})
     _my_id  = None
@@ -48,16 +59,36 @@ def _reset_state() -> None:
         input_q.get_nowait()
 
 
-# ── Menü ──────────────────────────────────────────────────────────────────────
+# ── HTTP-Hilfen ───────────────────────────────────────────────────────────────
 
-def run_menu(screen: pygame.Surface, clock: pygame.time.Clock,
-             font_sm: pygame.font.Font, font_lg: pygame.font.Font,
-             font_xl: pygame.font.Font,
-             sound_enabled: bool) -> tuple[Optional[str], bool]:
-    """Zeigt das Server-Auswahlmenü. Gibt (URL oder None, sound_enabled) zurück."""
+def _rooms_http_url(server_url: str) -> str:
+    """ws://host:port/ws  →  http://host:port/rooms"""
+    p = urlparse(server_url)
+    scheme = "https" if p.scheme == "wss" else "http"
+    return urlunparse(p._replace(scheme=scheme, path="/rooms", query="", fragment=""))
+
+
+def _fetch_rooms_async(server_url: str, result: dict) -> None:
+    try:
+        url = _rooms_http_url(server_url)
+        with urllib.request.urlopen(url, timeout=3) as r:
+            result["data"] = json.loads(r.read())
+    except Exception as e:
+        result["error"] = str(e)
+    finally:
+        result["done"] = True
+
+
+# ── Menü: Server-Auswahl ──────────────────────────────────────────────────────
+
+def run_server_menu(screen: pygame.Surface, clock: pygame.time.Clock,
+                    font_sm: pygame.font.Font, font_lg: pygame.font.Font,
+                    font_xl: pygame.font.Font,
+                    sound_enabled: bool) -> tuple[Optional[str], bool]:
+    """Gibt (Server-URL oder None, sound_enabled) zurück."""
     selected      = 0
     option_rects: list[pygame.Rect] = []
-    checkbox_rect = pygame.Rect(0, 0, 16, 16)  # wird unten gesetzt
+    checkbox_rect = pygame.Rect(0, 0, 14, 14)
 
     while True:
         clock.tick(60)
@@ -88,14 +119,12 @@ def run_menu(screen: pygame.Surface, clock: pygame.time.Clock,
                         if rect.collidepoint(event.pos):
                             return SERVERS[i][1], sound_enabled
 
-        # Hintergrund + Gitter
         screen.fill(BG)
         for x in range(0, sw + 100, 100):
             pygame.draw.line(screen, GRID, (x, 0), (x, sh))
         for y in range(0, sh + 100, 100):
             pygame.draw.line(screen, GRID, (0, y), (sw, y))
 
-        # Titel
         title = font_xl.render("ML-GAME", True, (220, 220, 220))
         screen.blit(title, (cx - title.get_width() // 2, sh // 3 - 80))
 
@@ -104,7 +133,6 @@ def run_menu(screen: pygame.Surface, clock: pygame.time.Clock,
         sub = font_sm.render("Server auswaehlen", True, GRAY)
         screen.blit(sub, (cx - sub.get_width() // 2, sep_y + 12))
 
-        # Serveroptionen
         option_rects.clear()
         for i, (label, url) in enumerate(SERVERS):
             is_sel  = i == selected
@@ -134,11 +162,196 @@ def run_menu(screen: pygame.Surface, clock: pygame.time.Clock,
         if sound_enabled:
             pygame.draw.line(screen, GRAY, (cb_x + 2, cb_y + 7),  (cb_x + 5,  cb_y + 11), 2)
             pygame.draw.line(screen, GRAY, (cb_x + 5, cb_y + 11), (cb_x + 12, cb_y + 3),  2)
-        label_surf = font_sm.render("Sound", True, GRAY)
-        screen.blit(label_surf, (cb_x + 20, cb_y))
+        screen.blit(font_sm.render("Sound", True, GRAY), (cb_x + 20, cb_y))
 
         hint = font_sm.render(
-            "hoch/runter  Auswaehlen      Enter  Verbinden      ESC  Beenden",
+            "hoch/runter  Auswaehlen      Enter  Weiter      ESC  Beenden",
+            True, (45, 45, 45),
+        )
+        screen.blit(hint, (cx - hint.get_width() // 2, sh - 44))
+        pygame.display.flip()
+
+
+# ── Menü: Room-Auswahl ────────────────────────────────────────────────────────
+
+def run_room_menu(screen: pygame.Surface, clock: pygame.time.Clock,
+                  server_url: str,
+                  font_sm: pygame.font.Font, font_lg: pygame.font.Font,
+                  font_xl: pygame.font.Font) -> Optional[tuple[str, bool]]:
+    """Gibt (room_name, spectator) zurück oder None für zurück zur Server-Auswahl."""
+
+    fetch_result: dict = {"done": False, "data": None, "error": None}
+    threading.Thread(
+        target=_fetch_rooms_async, args=(server_url, fetch_result), daemon=True,
+    ).start()
+
+    selected    = 0
+    spectator   = False
+    custom_text = ""
+    in_custom   = False
+    row_rects:  list[pygame.Rect] = []
+
+    while True:
+        clock.tick(60)
+        sw, sh = screen.get_size()
+        cx = sw // 2
+
+        rooms_list: list[tuple[str, int]] = []
+        if fetch_result["data"]:
+            for rid, info in fetch_result["data"].items():
+                rooms_list.append((rid, info.get("players", 0)))
+
+        total_rows = len(rooms_list) + 1   # +1 für Eigener-Room-Zeile
+        selected   = max(0, min(selected, total_rows - 1))
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return None
+
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    if in_custom:
+                        in_custom = False
+                    else:
+                        return None
+
+                elif event.key == pygame.K_TAB:
+                    spectator = not spectator
+
+                elif event.key in (pygame.K_UP, pygame.K_w) and not in_custom:
+                    selected = (selected - 1) % total_rows
+
+                elif event.key in (pygame.K_DOWN, pygame.K_s) and not in_custom:
+                    selected = (selected + 1) % total_rows
+
+                elif event.key == pygame.K_RETURN:
+                    if selected < len(rooms_list):
+                        return (rooms_list[selected][0], spectator)
+                    else:
+                        return (custom_text.strip() or "default", spectator)
+
+                elif event.key == pygame.K_BACKSPACE and in_custom:
+                    custom_text = custom_text[:-1]
+
+                elif (in_custom or selected == len(rooms_list)):
+                    if event.unicode.isprintable() and len(custom_text) < 28:
+                        custom_text += event.unicode
+                        in_custom = True
+
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                for i, rect in enumerate(row_rects):
+                    if rect.collidepoint(event.pos):
+                        if i == selected:
+                            if i < len(rooms_list):
+                                return (rooms_list[i][0], spectator)
+                            else:
+                                in_custom = True
+                        else:
+                            selected  = i
+                            in_custom = (i == len(rooms_list))
+
+            elif event.type == pygame.MOUSEMOTION and not in_custom:
+                for i, rect in enumerate(row_rects):
+                    if rect.collidepoint(event.pos):
+                        selected = i
+
+        # ── Zeichnen ───────────────────────────────────────────────────────────
+        screen.fill(BG)
+        for x in range(0, sw + 100, 100):
+            pygame.draw.line(screen, GRID, (x, 0), (x, sh))
+        for y in range(0, sh + 100, 100):
+            pygame.draw.line(screen, GRID, (0, y), (sw, y))
+
+        title = font_xl.render("ML-GAME", True, (220, 220, 220))
+        screen.blit(title, (cx - title.get_width() // 2, sh // 4 - 60))
+
+        srv_lbl = font_sm.render(server_url, True, DIMGRAY)
+        screen.blit(srv_lbl, (cx - srv_lbl.get_width() // 2, sh // 4 + 10))
+
+        sep_y = sh // 4 + 36
+        pygame.draw.line(screen, DARK, (cx - 240, sep_y), (cx + 240, sep_y), 1)
+        sub = font_sm.render("Room auswaehlen", True, GRAY)
+        screen.blit(sub, (cx - sub.get_width() // 2, sep_y + 12))
+
+        ROW_H  = 52
+        LIST_Y = sep_y + 44
+
+        if not fetch_result["done"]:
+            loading = font_sm.render("Lade Rooms...", True, DIMGRAY)
+            screen.blit(loading, (cx - loading.get_width() // 2, LIST_Y + 10))
+        elif fetch_result["error"] and not rooms_list:
+            err = font_sm.render("Server nicht erreichbar", True, (70, 45, 45))
+            screen.blit(err, (cx - err.get_width() // 2, LIST_Y + 10))
+
+        row_rects.clear()
+
+        for i, (room_name, player_count) in enumerate(rooms_list):
+            is_sel = (i == selected)
+            ry     = LIST_Y + i * ROW_H
+            rect   = pygame.Rect(cx - 250, ry - 6, 500, ROW_H - 4)
+            row_rects.append(rect)
+
+            if is_sel:
+                hl = pygame.Surface((500, ROW_H - 4), pygame.SRCALPHA)
+                hl.fill((255, 255, 255, 10))
+                screen.blit(hl, (cx - 250, ry - 6))
+                pygame.draw.rect(screen, DARK, rect, 1)
+                tx, ty = cx - 238, ry + 8
+                pygame.draw.polygon(screen, WHITE,
+                                    [(tx, ty), (tx + 8, ty + 7), (tx, ty + 14)])
+
+            col_name  = WHITE if is_sel else GRAY
+            col_count = GRAY  if is_sel else DIMGRAY
+            screen.blit(font_lg.render(room_name, True, col_name), (cx - 218, ry))
+            cnt_lbl = font_sm.render(f"{player_count} Spieler", True, col_count)
+            screen.blit(cnt_lbl, (cx + 180 - cnt_lbl.get_width(), ry + 6))
+
+        # Eigener-Room-Zeile
+        custom_idx = len(rooms_list)
+        is_csel    = (selected == custom_idx)
+        cry        = LIST_Y + custom_idx * ROW_H
+        crect      = pygame.Rect(cx - 250, cry - 6, 500, ROW_H - 4)
+        row_rects.append(crect)
+
+        if is_csel:
+            hl = pygame.Surface((500, ROW_H - 4), pygame.SRCALPHA)
+            hl.fill((255, 255, 255, 8))
+            screen.blit(hl, (cx - 250, cry - 6))
+            pygame.draw.rect(screen, DARK, crect, 1)
+            tx, ty = cx - 238, cry + 8
+            pygame.draw.polygon(screen, WHITE,
+                                [(tx, ty), (tx + 8, ty + 7), (tx, ty + 14)])
+
+        blink       = in_custom and (pygame.time.get_ticks() // 500) % 2 == 0
+        cursor_char = "|" if blink else ""
+        custom_col  = WHITE if is_csel else GRAY
+        custom_disp = font_lg.render(
+            f"Eigener Room: {custom_text}{cursor_char}", True, custom_col)
+        screen.blit(custom_disp, (cx - 218, cry))
+
+        # Modus-Toggle
+        mode_y = LIST_Y + total_rows * ROW_H + 14
+        pygame.draw.line(screen, DARK, (cx - 240, mode_y - 6),
+                         (cx + 240, mode_y - 6), 1)
+
+        pl_col   = WHITE if not spectator else DIMGRAY
+        sp_col   = WHITE if spectator     else DIMGRAY
+        play_lbl = font_lg.render("SPIELEN",   True, pl_col)
+        spec_lbl = font_lg.render("ZUSCHAUEN", True, sp_col)
+        gap      = 28
+        total_w  = play_lbl.get_width() + gap + spec_lbl.get_width()
+        bx       = cx - total_w // 2
+        screen.blit(play_lbl, (bx, mode_y + 8))
+        pygame.draw.line(screen, DARK,
+                         (bx + play_lbl.get_width() + gap // 2, mode_y + 12),
+                         (bx + play_lbl.get_width() + gap // 2, mode_y + 36), 1)
+        screen.blit(spec_lbl, (bx + play_lbl.get_width() + gap, mode_y + 8))
+
+        tab_hint = font_sm.render("Tab: wechseln", True, (45, 45, 45))
+        screen.blit(tab_hint, (cx - tab_hint.get_width() // 2, mode_y + 44))
+
+        hint = font_sm.render(
+            "hoch/runter  Auswaehlen  |  Tab  Modus  |  Enter  Verbinden  |  ESC  Zurueck",
             True, (45, 45, 45),
         )
         screen.blit(hint, (cx - hint.get_width() // 2, sh - 44))
@@ -168,119 +381,146 @@ def _build_input(pressed, aim: float) -> dict:
 # ── Spielschleife ─────────────────────────────────────────────────────────────
 
 def run_game(screen: pygame.Surface, clock: pygame.time.Clock,
-             server_url: str, sounds: SoundManager,
+             server_url: str, room: str, spectator: bool,
+             sounds: SoundManager,
              font_sm: pygame.font.Font, font_md: pygame.font.Font,
              font_lg: pygame.font.Font, font_xl: pygame.font.Font) -> bool:
     """Führt die Spielschleife aus. Gibt True zurück wenn Rückkehr ins Menü."""
     global _my_id, _status
 
     _reset_state()
-    start_network(server_url)
-    pygame.display.set_caption(f"ml-game  –  {server_url}")
-    pygame.mouse.set_visible(False)
+
+    qs = f"?room={room}"
+    if spectator:
+        qs += "&type=spectator"
+    start_network(server_url + qs)
+
+    caption = f"ml-game  –  {server_url}  [{room}]"
+    if spectator:
+        caption += "  [Zuschauer]"
+    pygame.display.set_caption(caption)
+    pygame.mouse.set_visible(spectator)
     sounds.start_music()
 
-    cam_x, cam_y   = 0.0, 0.0
-    effects:        list[dict] = []
-    send_timer:     float = 0.0
-    shoot_cooldown: float = 0.0
+    cam_x, cam_y    = 0.0, 0.0
+    effects:         list[dict] = []
+    send_timer:      float = 0.0
+    shoot_cooldown:  float = 0.0
 
-    while True:
-        dt = clock.tick(FPS) / 1000.0
-        shoot_cooldown = max(0.0, shoot_cooldown - dt)
+    try:
+        while True:
+            dt = clock.tick(FPS) / 1000.0
+            shoot_cooldown = max(0.0, shoot_cooldown - dt)
 
-        # ── Nachrichten vom WS-Thread ──────────────────────────────────────────
-        while not state_q.empty():
-            msg      = state_q.get_nowait()
-            msg_type = msg.get("type")
+            # ── Nachrichten vom WS-Thread ──────────────────────────────────────
+            while not state_q.empty():
+                msg      = state_q.get_nowait()
+                msg_type = msg.get("type")
 
-            if msg_type == "_connected":
-                _status = f"Verbunden  |  {server_url}"
-            elif msg_type == "_disconnected":
-                _status = "Getrennt – verbinde neu..."
-                _my_id  = None
-            elif msg_type == "welcome":
-                _my_id = msg["player_id"]
-            elif msg_type == "state":
-                _state.update(msg)
-            elif msg_type == "events":
-                for ev in msg.get("events", []):
-                    ev_type   = ev.get("type")
-                    target_id = ev.get("ship") if ev_type == "hit" else ev.get("victim")
-                    if not target_id:
-                        continue
-                    ship = next(
-                        (s for s in _state.get("ships", []) if s["id"] == target_id),
-                        None,
+                if msg_type == "_connected":
+                    base = f"Verbunden  |  {server_url}  [{room}]"
+                    _status = ("Zuschauer  |  " + base) if spectator else base
+                elif msg_type == "_disconnected":
+                    _status = "Getrennt – verbinde neu..."
+                    _my_id  = None
+                elif msg_type == "welcome":
+                    if not spectator:
+                        _my_id = msg["player_id"]
+                elif msg_type == "state":
+                    _state.update(msg)
+                elif msg_type == "events":
+                    for ev in msg.get("events", []):
+                        ev_type   = ev.get("type")
+                        target_id = ev.get("ship") if ev_type == "hit" else ev.get("victim")
+                        if not target_id:
+                            continue
+                        ship = next(
+                            (s for s in _state.get("ships", []) if s["id"] == target_id),
+                            None,
+                        )
+                        if ship:
+                            effects.append({
+                                "type": ev_type,
+                                "x": ship["x"], "y": ship["y"],
+                                "age": 0.0,
+                                "duration": 0.7 if ev_type == "kill" else 0.25,
+                            })
+                        if ev_type == "kill":
+                            sounds.explosion()
+
+            # ── Events ────────────────────────────────────────────────────────
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    return False
+                elif event.type == pygame.KEYDOWN:
+                    if event.key in (pygame.K_ESCAPE, pygame.K_q):
+                        return True
+
+            pressed = pygame.key.get_pressed()
+
+            # ── Kamera ────────────────────────────────────────────────────────
+            ships = _state.get("ships", [])
+            if spectator:
+                if pressed[pygame.K_w] or pressed[pygame.K_UP]:    cam_y -= SPECTATOR_CAM_SPEED * dt
+                if pressed[pygame.K_s] or pressed[pygame.K_DOWN]:  cam_y += SPECTATOR_CAM_SPEED * dt
+                if pressed[pygame.K_a] or pressed[pygame.K_LEFT]:  cam_x -= SPECTATOR_CAM_SPEED * dt
+                if pressed[pygame.K_d] or pressed[pygame.K_RIGHT]: cam_x += SPECTATOR_CAM_SPEED * dt
+            else:
+                my_ship = next((s for s in ships if s["id"] == _my_id), None)
+                if my_ship:
+                    cam_x, cam_y = my_ship["x"], my_ship["y"]
+
+            # ── Eingabe senden (30 Hz, nur als Spieler) + Sound ───────────────
+            if not spectator:
+                send_timer += dt
+                if send_timer >= 1.0 / 30 and _my_id:
+                    send_timer = 0.0
+                    inp = _build_input(pressed, _aim_angle(screen))
+                    input_q.put(inp)
+
+                    if inp["shoot"] and shoot_cooldown == 0.0:
+                        sounds.shoot()
+                        shoot_cooldown = SHOOT_COOLDOWN
+
+                    sounds.update_thrust(
+                        inp["up"] or inp["down"] or inp["left"] or inp["right"]
                     )
-                    if ship:
-                        effects.append({
-                            "type": ev_type,
-                            "x": ship["x"], "y": ship["y"],
-                            "age": 0.0,
-                            "duration": 0.7 if ev_type == "kill" else 0.25,
-                        })
-                    if ev_type == "kill":
-                        sounds.explosion()
 
-        # ── Events ────────────────────────────────────────────────────────────
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                sounds.stop_all()
-                sounds.stop_music()
-                return False
-            elif event.type == pygame.KEYDOWN:
-                if event.key in (pygame.K_ESCAPE, pygame.K_q):
-                    sounds.stop_all()
-                    sounds.stop_music()
-                    return True
+            # ── Zeichnen ───────────────────────────────────────────────────────
+            screen.fill(BG)
+            draw_background(screen, cam_x, cam_y)
+            draw_nebula(screen, cam_x, cam_y)
+            draw_grid(screen, cam_x, cam_y)
 
-        # ── Eingabe senden (30 Hz) + Sound ────────────────────────────────────
-        send_timer += dt
-        if send_timer >= 1.0 / 30 and _my_id:
-            send_timer = 0.0
-            inp = _build_input(pygame.key.get_pressed(), _aim_angle(screen))
-            input_q.put(inp)
+            for b in _state.get("bullets", []):
+                draw_bullet(screen, b, cam_x, cam_y)
+            for s in ships:
+                draw_ship(screen, s, s["id"] == _my_id, cam_x, cam_y)
 
-            # Schuss-Sound (client-seitig getaktet wie Server-Cooldown)
-            if inp["shoot"] and shoot_cooldown == 0.0:
-                sounds.shoot()
-                shoot_cooldown = SHOOT_COOLDOWN
+            effects = [ef for ef in effects if draw_effect(screen, ef, dt, cam_x, cam_y)]
 
-            # Schub-Sound
-            thrusting = inp["up"] or inp["down"] or inp["left"] or inp["right"]
-            sounds.update_thrust(thrusting)
+            if not spectator:
+                draw_enemy_indicators(screen, ships, _my_id)
+                my_ship = next((s for s in ships if s["id"] == _my_id), None)
+                if my_ship and not my_ship["alive"]:
+                    draw_death_overlay(screen, font_xl, font_md)
+            else:
+                sw, sh = screen.get_size()
+                banner = font_sm.render("ZUSCHAUER  |  WASD: Kamera", True, (50, 50, 50))
+                screen.blit(banner, (sw // 2 - banner.get_width() // 2, 16))
 
-        # ── Kamera zentriert auf eigenes Schiff ───────────────────────────────
-        ships   = _state.get("ships", [])
-        my_ship = next((s for s in ships if s["id"] == _my_id), None)
-        if my_ship:
-            cam_x, cam_y = my_ship["x"], my_ship["y"]
+            draw_minimap(screen, ships, _my_id)
+            draw_hud(screen, ships, _my_id, _status, font_sm, font_lg)
 
-        # ── Zeichnen ───────────────────────────────────────────────────────────
-        screen.fill(BG)
-        draw_background(screen, cam_x, cam_y)
-        draw_nebula(screen, cam_x, cam_y)
-        draw_grid(screen, cam_x, cam_y)
+            if not spectator:
+                mx, my_pos = pygame.mouse.get_pos()
+                draw_crosshair(screen, mx, my_pos)
 
-        for b in _state.get("bullets", []):
-            draw_bullet(screen, b, cam_x, cam_y)
-        for s in ships:
-            draw_ship(screen, s, s["id"] == _my_id, cam_x, cam_y)
-
-        effects = [ef for ef in effects if draw_effect(screen, ef, dt, cam_x, cam_y)]
-        draw_enemy_indicators(screen, ships, _my_id)
-
-        if my_ship and not my_ship["alive"]:
-            draw_death_overlay(screen, font_xl, font_md)
-
-        draw_minimap(screen, ships, _my_id)
-        draw_hud(screen, ships, _my_id, _status, font_sm, font_lg)
-
-        mx, my_pos = pygame.mouse.get_pos()
-        draw_crosshair(screen, mx, my_pos)
-
-        pygame.display.flip()
+            pygame.display.flip()
+    finally:
+        sounds.stop_all()
+        sounds.stop_music()
+        stop_network()
 
 
 # ── Einstiegspunkt ────────────────────────────────────────────────────────────
@@ -299,24 +539,36 @@ def main() -> None:
 
     sounds = SoundManager()
 
-    # CLI-Argument: Menü überspringen
+    # CLI: Menü überspringen
     if len(sys.argv) > 1:
-        run_game(screen, clock, sys.argv[1], sounds,
+        srv  = sys.argv[1]
+        room = sys.argv[2] if len(sys.argv) > 2 else "default"
+        spec = len(sys.argv) > 3 and sys.argv[3] == "spectate"
+        run_game(screen, clock, srv, room, spec, sounds,
                  font_sm, font_md, font_lg, font_xl)
         pygame.quit()
         return
 
-    # Menü-Schleife
+    # Menü-Schleife: Server → Room → Spiel
     sound_enabled = True
     while True:
         pygame.mouse.set_visible(True)
-        server_url, sound_enabled = run_menu(
+
+        server_url, sound_enabled = run_server_menu(
             screen, clock, font_sm, font_lg, font_xl, sound_enabled)
         sounds.enabled = sound_enabled
         if server_url is None:
             break
-        back_to_menu = run_game(screen, clock, server_url, sounds,
-                                font_sm, font_md, font_lg, font_xl)
+
+        result = run_room_menu(screen, clock, server_url, font_sm, font_lg, font_xl)
+        if result is None:
+            continue   # zurück zur Server-Auswahl
+
+        room, spectator = result
+        back_to_menu = run_game(
+            screen, clock, server_url, room, spectator, sounds,
+            font_sm, font_md, font_lg, font_xl,
+        )
         if not back_to_menu:
             break
 

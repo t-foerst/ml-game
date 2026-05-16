@@ -1,7 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "PowerShell(New-Item -ItemType Directory \"d:\\\\Develop\\\\ml-game\\\\client-kai\")"
+      "PowerShell(New-Item -ItemType Directory \"d:\\\\Develop\\\\ml-game\\\\client-kai\")",
+      "Bash(python -m py_compile client/main.py)",
+      "Bash(python -m py_compile client/network.py)",
+      "Bash(python -m py_compile client/renderer.py)",
+      "Bash(python -m py_compile client/sound.py)",
+      "Bash(python -m py_compile env.py)",
+      "Bash(python -m py_compile opponent.py)",
+      "Bash(python -m py_compile train.py)",
+      "Bash(python -m py_compile run_bot.py)"
     ]
   }
 }

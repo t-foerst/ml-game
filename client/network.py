@@ -4,18 +4,24 @@ Stellt zwei thread-sichere Queues bereit:
   state_q  – Nachrichten vom Server  (WS-Thread → Main-Thread)
   input_q  – Eingaben an den Server  (Main-Thread → WS-Thread)
 
-Aufruf: start_network(url) startet den Thread einmalig.
+stop_network()  – beendet aktive Verbindung und Reconnect-Loop sauber
+start_network() – beendet vorherige Verbindung und startet neue Session
 """
 
 import asyncio
 import json
 import queue
 import threading
+from typing import Callable, Optional
 
 import websockets
 
 state_q: queue.Queue = queue.Queue()
 input_q: queue.Queue = queue.Queue()
+
+# Wird vom laufenden WS-Thread gesetzt; thread-safe über call_soon_threadsafe
+_stop_fn: Optional[Callable[[], None]] = None
+_stop_fn_lock = threading.Lock()
 
 
 async def _recv(ws) -> None:
@@ -34,14 +40,23 @@ async def _send_loop(ws) -> None:
 
 
 async def _ws_run(url: str) -> None:
-    while True:
+    global _stop_fn
+    loop = asyncio.get_running_loop()
+    stop_event = asyncio.Event()
+
+    with _stop_fn_lock:
+        _stop_fn = lambda: loop.call_soon_threadsafe(stop_event.set)
+
+    while not stop_event.is_set():
         try:
             async with websockets.connect(url) as ws:
                 state_q.put({"type": "_connected"})
                 recv_task = asyncio.create_task(_recv(ws))
                 send_task = asyncio.create_task(_send_loop(ws))
+                stop_task = asyncio.create_task(stop_event.wait())
+
                 _done, pending = await asyncio.wait(
-                    [recv_task, send_task],
+                    [recv_task, send_task, stop_task],
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 for t in pending:
@@ -52,12 +67,26 @@ async def _ws_run(url: str) -> None:
                         pass
         except Exception:
             pass
-        state_q.put({"type": "_disconnected"})
-        await asyncio.sleep(2.0)
+
+        if not stop_event.is_set():
+            state_q.put({"type": "_disconnected"})
+            await asyncio.sleep(2.0)
+
+    with _stop_fn_lock:
+        _stop_fn = None
+
+
+def stop_network() -> None:
+    """Beendet Reconnect-Loop und aktive WS-Verbindung."""
+    with _stop_fn_lock:
+        fn = _stop_fn
+    if fn:
+        fn()
 
 
 def start_network(url: str) -> None:
-    """Startet den WebSocket-Thread. Pro Session einmal aufrufen."""
+    """Beendet vorherige Verbindung und startet neue WS-Session."""
+    stop_network()
     threading.Thread(
         target=lambda: asyncio.run(_ws_run(url)),
         daemon=True,
