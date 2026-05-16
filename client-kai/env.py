@@ -30,17 +30,17 @@ STEP_DT      = 1 / 20
 MAX_STEPS = 300
 
 # Rewards
-R_HIT_LANDED =   7.0
-R_HIT_TAKEN  =  -5.0
+R_HIT_LANDED =   10.0
+R_HIT_TAKEN  =  -10.0
 R_SURVIVE    =  0.01
 
 # Annäherungs-/Orbit-Übergang
-SIGHT_RANGE        = 300.0   # px, Grenze zwischen Annähern und Orbit
-BLEND_WIDTH        = 100.0   # px, Übergangszone (±50 um SIGHT_RANGE)
-R_APPROACH_SCALE   = 0.02   # Reward pro px Annäherung
+SIGHT_RANGE        = 400.0   # px, Grenze zwischen Annähern und Orbit
+BLEND_WIDTH        = 300.0   # px, Übergangszone (±50 um SIGHT_RANGE)
+R_APPROACH_SCALE   = 0.01   # Reward pro px Annäherung
 R_TANGENTIAL_SCALE = 0.002   # Reward pro px Tangential-Bewegung
-R_AIM_PASSIVE      = 0.05    # Max-Reward pro Schritt für richtigen Zielwinkel
-R_AIM_SHOOT        = 2.0     # Zusatz-Reward wenn dabei auch geschossen wird
+R_AIM_PASSIVE      = 0.00    # 0.05 Max-Reward pro Schritt für richtigen Zielwinkel
+R_AIM_SHOOT        = 0.0     # 2.0 Zusatz-Reward wenn dabei auch geschossen wird
 AIM_CONE_DEG       = 30.0    # Winkel-Toleranz in Grad
 R_JERK             = 0.1     # Penalty bei Bewegungsrichtungsänderung
 
