@@ -180,6 +180,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
 
     # ── Spieler / Bot ─────────────────────────────────────────────────────────
     is_bot = client_type == "bot"
+    if is_bot:
+        room.game.clear_bullets()
     room.players[client_id] = {"ws": ws, "is_bot": is_bot}
     room.game.add_player(client_id)
 

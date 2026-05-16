@@ -180,6 +180,9 @@ class Game:
     def remove_player(self, player_id: str) -> None:
         self.ships.pop(player_id, None)
 
+    def clear_bullets(self) -> None:
+        self.bullets.clear()
+
     def set_input(self, player_id: str, inp: dict) -> None:
         ship = self.ships.get(player_id)
         if ship:
