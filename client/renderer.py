@@ -5,43 +5,57 @@ from pathlib import Path
 from typing import Optional
 
 import pygame
-
 from constants import (
-    BG, GRID, ORIGIN, WHITE, GRAY, DARK, DIMGRAY,
-    HP_HIGH, HP_MID, HP_LOW,
-    MAX_HP, MINIMAP_SIZE, MINIMAP_SCALE, INDICATOR_DIST,
+    BG,
+    DARK,
+    DIMGRAY,
+    GRAY,
+    GRID,
+    HP_HIGH,
+    HP_LOW,
+    HP_MID,
+    INDICATOR_DIST,
+    MAX_HP,
+    MINIMAP_SCALE,
+    MINIMAP_SIZE,
+    ORIGIN,
+    WHITE,
 )
-
 
 # ── Parallax-Hintergrund ──────────────────────────────────────────────────────
 
 _ASSETS = Path(__file__).parent / "assets"
-_bg_surf:     Optional[pygame.Surface] = None
+_bg_surf: Optional[pygame.Surface] = None
 _nebula_surf: Optional[pygame.Surface] = None
-_bg_scaled:   Optional[pygame.Surface] = None
-_bg_scaled_size: tuple[int, int]       = (0, 0)
+_bg_scaled: Optional[pygame.Surface] = None
+_bg_scaled_size: tuple[int, int] = (0, 0)
 
-_BG_PARALLAX     = 0.03
+_BG_PARALLAX = 0.03
 _NEBULA_PARALLAX = 0.12
-_BG_PAD          = 100  # px Puffer rundherum für Parallax-Verschiebung
+_BG_PAD = 100
 
 
 def _load_backgrounds() -> None:
     global _bg_surf, _nebula_surf
     if _bg_surf is None:
         try:
-            _bg_surf = pygame.image.load(str(_ASSETS / "background-green.jpg")).convert()
+            _bg_surf = pygame.image.load(
+                str(_ASSETS / "background-green.jpg")
+            ).convert()
         except Exception:
             pass
     if _nebula_surf is None:
         try:
-            _nebula_surf = pygame.image.load(str(_ASSETS / "nebula.png")).convert_alpha()
+            _nebula_surf = pygame.image.load(
+                str(_ASSETS / "nebula.png")
+            ).convert_alpha()
         except Exception:
             pass
 
 
-def _draw_tiled(surf: pygame.Surface, img: pygame.Surface,
-                cam_x: float, cam_y: float, factor: float) -> None:
+def _draw_tiled(
+    surf: pygame.Surface, img: pygame.Surface, cam_x: float, cam_y: float, factor: float
+) -> None:
     iw, ih = img.get_size()
     sw, sh = surf.get_size()
     ox = int(cam_x * factor) % iw
@@ -50,7 +64,7 @@ def _draw_tiled(surf: pygame.Surface, img: pygame.Surface,
     while x < sw:
         y = -oy
         while y < sh:
-            surf.blit(img, (x, y))
+            surf.blit(img, (x, y), special_flags=pygame.BLEND_ADD)
             y += ih
         x += iw
 
@@ -81,23 +95,24 @@ def draw_nebula(surf: pygame.Surface, cam_x: float, cam_y: float) -> None:
 
 # ── Koordinaten-Hilfen ────────────────────────────────────────────────────────
 
-def w2s(wx: float, wy: float, cam_x: float, cam_y: float,
-        sw: int, sh: int) -> tuple[int, int]:
-    """Welt- → Bildschirmkoordinaten."""
+
+def w2s(
+    wx: float, wy: float, cam_x: float, cam_y: float, sw: int, sh: int
+) -> tuple[int, int]:
     return (int(wx - cam_x + sw // 2), int(wy - cam_y + sh // 2))
 
 
-def rotate_pts(pts: list[tuple[float, float]], angle: float,
-               ox: float, oy: float) -> list[tuple[float, float]]:
+def rotate_pts(
+    pts: list[tuple[float, float]], angle: float, ox: float, oy: float
+) -> list[tuple[float, float]]:
     cos_a, sin_a = math.cos(angle), math.sin(angle)
     return [
-        (ox + px * cos_a - py * sin_a,
-         oy + px * sin_a + py * cos_a)
-        for px, py in pts
+        (ox + px * cos_a - py * sin_a, oy + px * sin_a + py * cos_a) for px, py in pts
     ]
 
 
 # ── Spielfeld ─────────────────────────────────────────────────────────────────
+
 
 def draw_grid(surf: pygame.Surface, cam_x: float, cam_y: float) -> None:
     sw, sh = surf.get_size()
@@ -120,22 +135,21 @@ def draw_grid(surf: pygame.Surface, cam_x: float, cam_y: float) -> None:
 # ── Spielerfarben ─────────────────────────────────────────────────────────────
 
 _PLAYER_COLORS = [
-    (220,  50,  50),  # Rot
-    (160,  60, 220),  # Lila
-    (230, 210,  40),  # Gelb
-    ( 50, 120, 220),  # Blau
-    ( 50, 200,  80),  # Grün
-    (230, 130,  30),  # Orange
-    ( 40, 210, 210),  # Cyan
-    (220,  60, 160),  # Pink
+    (220, 50, 50),
+    (160, 60, 220),
+    (230, 210, 40),
+    (50, 120, 220),
+    (50, 200, 80),
+    (230, 130, 30),
+    (40, 210, 210),
+    (220, 60, 160),
 ]
 
-_UFO_BODY = ( 40,  90, 200)
-_UFO_RIM  = ( 20,  50, 140)
-_UFO_DOME = ( 70, 130, 240)
-
+_UFO_BODY = (40, 90, 200)
+_UFO_RIM = (20, 50, 140)
 
 _color_registry: dict[str, int] = {}
+
 
 def _player_color(ship_id: str) -> tuple[int, int, int]:
     if ship_id not in _color_registry:
@@ -145,18 +159,20 @@ def _player_color(ship_id: str) -> tuple[int, int, int]:
 
 # ── Raumschiff ────────────────────────────────────────────────────────────────
 
-def draw_ship(surf: pygame.Surface, ship: dict, is_me: bool,
-              cam_x: float, cam_y: float) -> None:
+
+def draw_ship(
+    surf: pygame.Surface, ship: dict, is_me: bool, cam_x: float, cam_y: float
+) -> None:
     if not ship["alive"]:
         return
 
     sw, sh = surf.get_size()
     sx, sy = w2s(ship["x"], ship["y"], cam_x, cam_y, sw, sh)
-    angle  = ship["angle"]
+    angle = ship["angle"]
 
-    # UFO-Körper (Kreis, dreht sich nicht)
+    # UFO-Körper (dreht sich nicht)
     pygame.draw.circle(surf, _UFO_BODY, (sx, sy), 20)
-    pygame.draw.circle(surf, _UFO_RIM,  (sx, sy), 20, 2)
+    pygame.draw.circle(surf, _UFO_RIM, (sx, sy), 20, 2)
 
     # Geschützturm (dreht sich mit aim_angle, Spielerfarbe)
     pcolor = _player_color(ship["id"])
@@ -164,11 +180,11 @@ def draw_ship(surf: pygame.Surface, ship: dict, is_me: bool,
     def rot(pts):
         return rotate_pts(pts, angle, sx, sy)
 
-    body    = rot([(16, 0), (-9, -10), (-9, 10)])
-    cockpit = rot([( 9, 0), (-3,  -5), (-3,  5)])
-    engine  = rot([(-9, -4), (-14, -4), (-14, 4), (-9, 4)])
+    body = rot([(16, 0), (-9, -10), (-9, 10)])
+    cockpit = rot([(9, 0), (-3, -5), (-3, 5)])
+    engine = rot([(-9, -4), (-14, -4), (-14, 4), (-9, 4)])
 
-    pygame.draw.polygon(surf, pcolor,   body)
+    pygame.draw.polygon(surf, pcolor, body)
     pygame.draw.polygon(surf, _UFO_RIM, body, 1)
     pygame.draw.polygon(surf, _UFO_RIM, cockpit)
     pygame.draw.polygon(surf, _UFO_RIM, engine)
@@ -177,16 +193,17 @@ def draw_ship(surf: pygame.Surface, ship: dict, is_me: bool,
     bw, bh = 36, 4
     bx, by = sx - bw // 2, sy - 36
     pygame.draw.rect(surf, (30, 30, 30), (bx, by, bw, bh))
-    ratio   = ship["health"] / MAX_HP
+    ratio = ship["health"] / MAX_HP
     bar_col = HP_HIGH if ratio > 0.6 else (HP_MID if ratio > 0.3 else HP_LOW)
     pygame.draw.rect(surf, bar_col, (bx, by, int(bw * ratio), bh))
 
 
 # ── Feind-Richtungsindikatoren ────────────────────────────────────────────────
 
-def draw_enemy_indicators(surf: pygame.Surface, ships: list,
-                          my_id: Optional[str]) -> None:
-    """Kleine Dreiecke um den Spieler zeigen die Richtung zu Feinden."""
+
+def draw_enemy_indicators(
+    surf: pygame.Surface, ships: list, my_id: Optional[str]
+) -> None:
     sw, sh = surf.get_size()
     cx, cy = sw // 2, sh // 2
 
@@ -208,46 +225,46 @@ def draw_enemy_indicators(surf: pygame.Surface, ships: list,
         ix = int(cx + math.cos(angle) * INDICATOR_DIST)
         iy = int(cy + math.sin(angle) * INDICATOR_DIST)
 
-        # Dreieck zeigt in Richtung Feind; Helligkeit skaliert mit Nähe
         brightness = max(60, min(180, int(200 - dist / 8)))
         col = (brightness, brightness, brightness)
         SIZE = 7
         pts = rotate_pts(
             [(SIZE, 0), (-SIZE * 0.7, -SIZE * 0.65), (-SIZE * 0.7, SIZE * 0.65)],
-            angle, ix, iy,
+            angle,
+            ix,
+            iy,
         )
         pygame.draw.polygon(surf, col, pts)
 
 
 # ── Geschoss ──────────────────────────────────────────────────────────────────
 
-def draw_bullet(surf: pygame.Surface, b: dict,
-                cam_x: float, cam_y: float) -> None:
+
+def draw_bullet(surf: pygame.Surface, b: dict, cam_x: float, cam_y: float) -> None:
     sw, sh = surf.get_size()
     sx, sy = w2s(b["x"], b["y"], cam_x, cam_y, sw, sh)
 
-    # Äußere weiche Aura (groß, sehr transparent)
     for radius, alpha in [(14, 18), (9, 40), (6, 80), (4, 140)]:
         glow = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
         pygame.draw.circle(glow, (255, 255, 255, alpha), (radius, radius), radius)
         surf.blit(glow, (sx - radius, sy - radius))
 
-    # Harter weißer Kern
     pygame.draw.circle(surf, (255, 255, 255), (sx, sy), 2)
 
 
 # ── Visuelle Effekte ──────────────────────────────────────────────────────────
 
-def draw_effect(surf: pygame.Surface, ef: dict, dt: float,
-                cam_x: float, cam_y: float) -> bool:
-    """Aktualisiert und zeichnet einen Effekt. Gibt False zurück wenn abgelaufen."""
+
+def draw_effect(
+    surf: pygame.Surface, ef: dict, dt: float, cam_x: float, cam_y: float
+) -> bool:
     ef["age"] += dt
     if ef["age"] >= ef["duration"]:
         return False
 
     sw, sh = surf.get_size()
     sx, sy = w2s(ef["x"], ef["y"], cam_x, cam_y, sw, sh)
-    p     = ef["age"] / ef["duration"]
+    p = ef["age"] / ef["duration"]
     alpha = int((1 - p) * 220)
 
     if ef["type"] == "kill":
@@ -255,8 +272,13 @@ def draw_effect(surf: pygame.Surface, ef: dict, dt: float,
             if radius < 1:
                 continue
             tmp = pygame.Surface((radius * 2 + 4, radius * 2 + 4), pygame.SRCALPHA)
-            pygame.draw.circle(tmp, (210, 210, 210, int(alpha * a_fac)),
-                               (radius + 2, radius + 2), radius, 3)
+            pygame.draw.circle(
+                tmp,
+                (210, 210, 210, int(alpha * a_fac)),
+                (radius + 2, radius + 2),
+                radius,
+                3,
+            )
             surf.blit(tmp, (sx - radius - 2, sy - radius - 2))
     else:
         r = int(26 * p)
@@ -270,6 +292,7 @@ def draw_effect(surf: pygame.Surface, ef: dict, dt: float,
 
 # ── Fadenkreuz ────────────────────────────────────────────────────────────────
 
+
 def draw_crosshair(surf: pygame.Surface, mx: int, my: int) -> None:
     S = 10
     pygame.draw.line(surf, GRAY, (mx - S, my), (mx + S, my), 1)
@@ -279,8 +302,9 @@ def draw_crosshair(surf: pygame.Surface, mx: int, my: int) -> None:
 
 # ── Minimap ───────────────────────────────────────────────────────────────────
 
+
 def draw_minimap(surf: pygame.Surface, ships: list, my_id: Optional[str]) -> None:
-    S  = MINIMAP_SIZE
+    S = MINIMAP_SIZE
     mm = pygame.Surface((S, S), pygame.SRCALPHA)
     mm.fill((0, 0, 0, 160))
     pygame.draw.rect(mm, (42, 42, 42, 255), mm.get_rect(), 1)
@@ -292,11 +316,11 @@ def draw_minimap(surf: pygame.Surface, ships: list, my_id: Optional[str]) -> Non
     for s in ships:
         if not s["alive"]:
             continue
-        mx_  = int(S / 2 + (s["x"] - cx) * MINIMAP_SCALE)
-        my_  = int(S / 2 + (s["y"] - cy) * MINIMAP_SCALE)
+        mx_ = int(S / 2 + (s["x"] - cx) * MINIMAP_SCALE)
+        my_ = int(S / 2 + (s["y"] - cy) * MINIMAP_SCALE)
         if 0 <= mx_ < S and 0 <= my_ < S:
             col = _player_color(s["id"])
-            r   = 4 if s["id"] == my_id else 3
+            r = 4 if s["id"] == my_id else 3
             pygame.draw.circle(mm, col, (mx_, my_), r)
 
     half = S // 2
@@ -309,9 +333,15 @@ def draw_minimap(surf: pygame.Surface, ships: list, my_id: Optional[str]) -> Non
 
 # ── HUD ───────────────────────────────────────────────────────────────────────
 
-def draw_hud(surf: pygame.Surface, ships: list, my_id: Optional[str],
-             status: str, font_sm: pygame.font.Font,
-             font_lg: pygame.font.Font) -> None:
+
+def draw_hud(
+    surf: pygame.Surface,
+    ships: list,
+    my_id: Optional[str],
+    status: str,
+    font_sm: pygame.font.Font,
+    font_lg: pygame.font.Font,
+) -> None:
     surf_w = surf.get_width()
 
     surf.blit(font_sm.render(status, True, (68, 68, 68)), (16, 16))
@@ -323,7 +353,8 @@ def draw_hud(surf: pygame.Surface, ships: list, my_id: Optional[str],
 
     hint = font_sm.render(
         "WASD: Bewegen  |  Maus: Zielen  |  LMB / Leertaste: Schiessen  |  ESC: Menue",
-        True, (50, 50, 50),
+        True,
+        (50, 50, 50),
     )
     surf.blit(hint, (16, 70))
 
@@ -331,18 +362,19 @@ def draw_hud(surf: pygame.Surface, ships: list, my_id: Optional[str],
     surf.blit(title, (surf_w - title.get_width() - 16, 16))
 
     for i, s in enumerate(sorted(ships, key=lambda x: -x["score"])):
-        you  = "  <- du" if s["id"] == my_id else ""
-        dead = "  x"    if not s["alive"]    else ""
-        col  = (200, 200, 200) if s["id"] == my_id else (90, 90, 90)
+        you = "  <- du" if s["id"] == my_id else ""
+        dead = "  x" if not s["alive"] else ""
+        col = _player_color(s["id"])
         label = font_sm.render(f"{s['score']} kills{you}{dead}", True, col)
         surf.blit(label, (surf_w - label.get_width() - 16, 36 + i * 20))
 
 
 # ── Tod-Overlay ───────────────────────────────────────────────────────────────
 
-def draw_death_overlay(surf: pygame.Surface,
-                       font_xl: pygame.font.Font,
-                       font_md: pygame.font.Font) -> None:
+
+def draw_death_overlay(
+    surf: pygame.Surface, font_xl: pygame.font.Font, font_md: pygame.font.Font
+) -> None:
     overlay = pygame.Surface(surf.get_size(), pygame.SRCALPHA)
     overlay.fill((0, 0, 0, 140))
     surf.blit(overlay, (0, 0))

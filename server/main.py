@@ -7,9 +7,9 @@ from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
-from game import Game, TICK_RATE
+from game import TICK_RATE, Game
 
-BROADCAST_RATE   = int(os.environ.get("BROADCAST_RATE",   "20"))
+BROADCAST_RATE = int(os.environ.get("BROADCAST_RATE", "60"))
 SPEED_MULTIPLIER = float(os.environ.get("SPEED_MULTIPLIER", "1.0"))
 
 DEFAULT_ROOM = "default"
@@ -20,9 +20,9 @@ FIXED_DT = 1.0 / TICK_RATE
 
 class Room:
     def __init__(self, room_id: str) -> None:
-        self.room_id    = room_id
-        self.game       = Game()
-        self.players:    dict[str, dict]      = {}  # player_id → {ws, is_bot}
+        self.room_id = room_id
+        self.game = Game()
+        self.players: dict[str, dict] = {}  # player_id → {ws, is_bot}
         self.spectators: dict[str, WebSocket] = {}  # spectator_id → ws
         self._task: Optional[asyncio.Task] = None
 
@@ -44,8 +44,8 @@ class Room:
             pass
 
     async def broadcast(self, data: dict) -> None:
-        msg  = json.dumps(data)
-        dead_players:    list[str] = []
+        msg = json.dumps(data)
+        dead_players: list[str] = []
         dead_spectators: list[str] = []
         for pid, info in list(self.players.items()):
             try:
@@ -70,7 +70,7 @@ class Room:
         loop = asyncio.get_running_loop()
 
         while True:
-            t0     = loop.time()
+            t0 = loop.time()
             events = self.game.update(FIXED_DT)
 
             if self.game.tick % broadcast_every == 0:
@@ -106,7 +106,8 @@ async def _cleanup_loop() -> None:
     while True:
         await asyncio.sleep(60)
         to_remove = [
-            rid for rid, r in list(rooms.items())
+            rid
+            for rid, r in list(rooms.items())
             if rid != DEFAULT_ROOM and not r.players and not r.spectators
         ]
         for rid in to_remove:
@@ -114,6 +115,7 @@ async def _cleanup_loop() -> None:
 
 
 # ── App-Lifecycle ─────────────────────────────────────────────────────────────
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -130,39 +132,50 @@ app = FastAPI(lifespan=lifespan)
 
 # ── HTTP-Endpoints ────────────────────────────────────────────────────────────
 
+
 @app.get("/rooms")
 async def list_rooms() -> JSONResponse:
-    return JSONResponse({
-        rid: {
-            "players":          len(r.players),
-            "spectators":       len(r.spectators),
-            "tick":             r.game.tick,
-            "speed_multiplier": SPEED_MULTIPLIER,
+    return JSONResponse(
+        {
+            rid: {
+                "players": len(r.players),
+                "spectators": len(r.spectators),
+                "tick": r.game.tick,
+                "speed_multiplier": SPEED_MULTIPLIER,
+            }
+            for rid, r in rooms.items()
         }
-        for rid, r in rooms.items()
-    })
+    )
 
 
 # ── WebSocket ─────────────────────────────────────────────────────────────────
 
+
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
     await ws.accept()
-    client_id  = str(uuid.uuid4())
-    client_type = ws.query_params.get("type", "player")   # "player" | "bot" | "spectator"
-    room_id    = ws.query_params.get("room", DEFAULT_ROOM)
+    client_id = str(uuid.uuid4())
+    client_type = ws.query_params.get(
+        "type", "player"
+    )  # "player" | "bot" | "spectator"
+    room_id = ws.query_params.get("room", DEFAULT_ROOM)
 
     room = get_or_create_room(room_id)
 
     if client_type == "spectator":
         room.spectators[client_id] = ws
-        await room.send(ws, {
-            "type": "welcome", "player_id": client_id,
-            "is_spectator": True, "room": room_id,
-        })
+        await room.send(
+            ws,
+            {
+                "type": "welcome",
+                "player_id": client_id,
+                "is_spectator": True,
+                "room": room_id,
+            },
+        )
         try:
             while True:
-                await ws.receive_text()   # drain keepalives / ignore input
+                await ws.receive_text()  # drain keepalives / ignore input
         except WebSocketDisconnect:
             pass
         finally:
@@ -174,10 +187,15 @@ async def ws_endpoint(ws: WebSocket) -> None:
     room.players[client_id] = {"ws": ws, "is_bot": is_bot}
     room.game.add_player(client_id)
 
-    await room.send(ws, {
-        "type": "welcome", "player_id": client_id,
-        "is_bot": is_bot, "room": room_id,
-    })
+    await room.send(
+        ws,
+        {
+            "type": "welcome",
+            "player_id": client_id,
+            "is_bot": is_bot,
+            "room": room_id,
+        },
+    )
     await room.broadcast({"type": "join", "player_id": client_id})
 
     try:

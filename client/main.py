@@ -30,12 +30,15 @@ import pygame
 from constants import BG, GRID, DARK, DIMGRAY, WHITE, GRAY, WIN_W, WIN_H, FPS, SERVERS
 from network import state_q, input_q, start_network, stop_network
 from renderer import (
+    draw_background, draw_nebula,
     draw_grid, draw_ship, draw_bullet, draw_effect,
     draw_minimap, draw_hud, draw_death_overlay,
     draw_enemy_indicators, draw_crosshair,
 )
+from sound import SoundManager
 
-SPECTATOR_CAM_SPEED = 500.0   # px/s
+SPECTATOR_CAM_SPEED = 500.0
+SHOOT_COOLDOWN      = 0.5    # muss mit server/game.py übereinstimmen
 
 # ── Spielzustand (Session-weit) ───────────────────────────────────────────────
 _state:  dict          = {"tick": 0, "ships": [], "bullets": []}
@@ -80,10 +83,12 @@ def _fetch_rooms_async(server_url: str, result: dict) -> None:
 
 def run_server_menu(screen: pygame.Surface, clock: pygame.time.Clock,
                     font_sm: pygame.font.Font, font_lg: pygame.font.Font,
-                    font_xl: pygame.font.Font) -> Optional[str]:
-    """Gibt die gewählte Server-URL zurück oder None."""
-    selected     = 0
+                    font_xl: pygame.font.Font,
+                    sound_enabled: bool) -> tuple[Optional[str], bool]:
+    """Gibt (Server-URL oder None, sound_enabled) zurück."""
+    selected      = 0
     option_rects: list[pygame.Rect] = []
+    checkbox_rect = pygame.Rect(0, 0, 14, 14)
 
     while True:
         clock.tick(60)
@@ -92,24 +97,27 @@ def run_server_menu(screen: pygame.Surface, clock: pygame.time.Clock,
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                return None
+                return None, sound_enabled
             elif event.type == pygame.KEYDOWN:
                 if event.key in (pygame.K_UP, pygame.K_w):
                     selected = (selected - 1) % len(SERVERS)
                 elif event.key in (pygame.K_DOWN, pygame.K_s):
                     selected = (selected + 1) % len(SERVERS)
                 elif event.key == pygame.K_RETURN:
-                    return SERVERS[selected][1]
+                    return SERVERS[selected][1], sound_enabled
                 elif event.key in (pygame.K_ESCAPE, pygame.K_q):
-                    return None
+                    return None, sound_enabled
             elif event.type == pygame.MOUSEMOTION:
                 for i, rect in enumerate(option_rects):
                     if rect.collidepoint(event.pos):
                         selected = i
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                for i, rect in enumerate(option_rects):
-                    if rect.collidepoint(event.pos):
-                        return SERVERS[i][1]
+                if checkbox_rect.collidepoint(event.pos):
+                    sound_enabled = not sound_enabled
+                else:
+                    for i, rect in enumerate(option_rects):
+                        if rect.collidepoint(event.pos):
+                            return SERVERS[i][1], sound_enabled
 
         screen.fill(BG)
         for x in range(0, sw + 100, 100):
@@ -146,6 +154,15 @@ def run_server_menu(screen: pygame.Surface, clock: pygame.time.Clock,
             screen.blit(font_lg.render(label, True, col_l), (cx - 220, entry_y))
             screen.blit(font_sm.render(url,   True, col_u),
                         (cx - 220, entry_y + font_lg.get_height() + 2))
+
+        # Sound-Checkbox
+        cb_x, cb_y = 24, sh - 44
+        checkbox_rect = pygame.Rect(cb_x, cb_y, 14, 14)
+        pygame.draw.rect(screen, GRAY, checkbox_rect, 1)
+        if sound_enabled:
+            pygame.draw.line(screen, GRAY, (cb_x + 2, cb_y + 7),  (cb_x + 5,  cb_y + 11), 2)
+            pygame.draw.line(screen, GRAY, (cb_x + 5, cb_y + 11), (cb_x + 12, cb_y + 3),  2)
+        screen.blit(font_sm.render("Sound", True, GRAY), (cb_x + 20, cb_y))
 
         hint = font_sm.render(
             "hoch/runter  Auswaehlen      Enter  Weiter      ESC  Beenden",
@@ -365,6 +382,7 @@ def _build_input(pressed, aim: float) -> dict:
 
 def run_game(screen: pygame.Surface, clock: pygame.time.Clock,
              server_url: str, room: str, spectator: bool,
+             sounds: SoundManager,
              font_sm: pygame.font.Font, font_md: pygame.font.Font,
              font_lg: pygame.font.Font, font_xl: pygame.font.Font) -> bool:
     """Führt die Spielschleife aus. Gibt True zurück wenn Rückkehr ins Menü."""
@@ -382,14 +400,17 @@ def run_game(screen: pygame.Surface, clock: pygame.time.Clock,
         caption += "  [Zuschauer]"
     pygame.display.set_caption(caption)
     pygame.mouse.set_visible(spectator)
+    sounds.start_music()
 
-    cam_x, cam_y = 0.0, 0.0
-    effects:    list[dict] = []
-    send_timer: float      = 0.0
+    cam_x, cam_y    = 0.0, 0.0
+    effects:         list[dict] = []
+    send_timer:      float = 0.0
+    shoot_cooldown:  float = 0.0
 
     try:
         while True:
             dt = clock.tick(FPS) / 1000.0
+            shoot_cooldown = max(0.0, shoot_cooldown - dt)
 
             # ── Nachrichten vom WS-Thread ──────────────────────────────────────
             while not state_q.empty():
@@ -424,6 +445,8 @@ def run_game(screen: pygame.Surface, clock: pygame.time.Clock,
                                 "age": 0.0,
                                 "duration": 0.7 if ev_type == "kill" else 0.25,
                             })
+                        if ev_type == "kill":
+                            sounds.explosion()
 
             # ── Events ────────────────────────────────────────────────────────
             for event in pygame.event.get():
@@ -447,15 +470,26 @@ def run_game(screen: pygame.Surface, clock: pygame.time.Clock,
                 if my_ship:
                     cam_x, cam_y = my_ship["x"], my_ship["y"]
 
-            # ── Eingabe senden (30 Hz, nur als Spieler) ───────────────────────
+            # ── Eingabe senden (30 Hz, nur als Spieler) + Sound ───────────────
             if not spectator:
                 send_timer += dt
                 if send_timer >= 1.0 / 30 and _my_id:
                     send_timer = 0.0
-                    input_q.put(_build_input(pressed, _aim_angle(screen)))
+                    inp = _build_input(pressed, _aim_angle(screen))
+                    input_q.put(inp)
+
+                    if inp["shoot"] and shoot_cooldown == 0.0:
+                        sounds.shoot()
+                        shoot_cooldown = SHOOT_COOLDOWN
+
+                    sounds.update_thrust(
+                        inp["up"] or inp["down"] or inp["left"] or inp["right"]
+                    )
 
             # ── Zeichnen ───────────────────────────────────────────────────────
             screen.fill(BG)
+            draw_background(screen, cam_x, cam_y)
+            draw_nebula(screen, cam_x, cam_y)
             draw_grid(screen, cam_x, cam_y)
 
             for b in _state.get("bullets", []):
@@ -484,6 +518,8 @@ def run_game(screen: pygame.Surface, clock: pygame.time.Clock,
 
             pygame.display.flip()
     finally:
+        sounds.stop_all()
+        sounds.stop_music()
         stop_network()
 
 
@@ -491,6 +527,7 @@ def run_game(screen: pygame.Surface, clock: pygame.time.Clock,
 
 def main() -> None:
     pygame.init()
+    pygame.mixer.init()
     screen = pygame.display.set_mode((WIN_W, WIN_H), pygame.RESIZABLE)
     pygame.display.set_caption("ml-game")
     clock = pygame.time.Clock()
@@ -500,20 +537,26 @@ def main() -> None:
     font_lg = pygame.font.Font(None, 30)
     font_xl = pygame.font.Font(None, 78)
 
+    sounds = SoundManager()
+
     # CLI: Menü überspringen
     if len(sys.argv) > 1:
         srv  = sys.argv[1]
         room = sys.argv[2] if len(sys.argv) > 2 else "default"
         spec = len(sys.argv) > 3 and sys.argv[3] == "spectate"
-        run_game(screen, clock, srv, room, spec, font_sm, font_md, font_lg, font_xl)
+        run_game(screen, clock, srv, room, spec, sounds,
+                 font_sm, font_md, font_lg, font_xl)
         pygame.quit()
         return
 
     # Menü-Schleife: Server → Room → Spiel
+    sound_enabled = True
     while True:
         pygame.mouse.set_visible(True)
 
-        server_url = run_server_menu(screen, clock, font_sm, font_lg, font_xl)
+        server_url, sound_enabled = run_server_menu(
+            screen, clock, font_sm, font_lg, font_xl, sound_enabled)
+        sounds.enabled = sound_enabled
         if server_url is None:
             break
 
@@ -523,7 +566,7 @@ def main() -> None:
 
         room, spectator = result
         back_to_menu = run_game(
-            screen, clock, server_url, room, spectator,
+            screen, clock, server_url, room, spectator, sounds,
             font_sm, font_md, font_lg, font_xl,
         )
         if not back_to_menu:
