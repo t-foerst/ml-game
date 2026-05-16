@@ -406,6 +406,8 @@ def run_game(screen: pygame.Surface, clock: pygame.time.Clock,
     effects:         list[dict] = []
     send_timer:      float = 0.0
     shoot_cooldown:  float = 0.0
+    follow_mode:     bool  = True   # spectator: True = follow player, False = free WASD
+    follow_idx:      int   = 0      # index into alive ships list
 
     try:
         while True:
@@ -455,16 +457,38 @@ def run_game(screen: pygame.Surface, clock: pygame.time.Clock,
                 elif event.type == pygame.KEYDOWN:
                     if event.key in (pygame.K_ESCAPE, pygame.K_q):
                         return True
+                    elif spectator and event.key in (pygame.K_TAB, pygame.K_RIGHT):
+                        alive = [s for s in _state.get("ships", []) if s.get("alive")]
+                        if alive:
+                            follow_idx  = (follow_idx + 1) % len(alive)
+                            follow_mode = True
+                    elif spectator and event.key == pygame.K_LEFT:
+                        alive = [s for s in _state.get("ships", []) if s.get("alive")]
+                        if alive:
+                            follow_idx  = (follow_idx - 1) % len(alive)
+                            follow_mode = True
 
             pressed = pygame.key.get_pressed()
 
             # ── Kamera ────────────────────────────────────────────────────────
             ships = _state.get("ships", [])
             if spectator:
-                if pressed[pygame.K_w] or pressed[pygame.K_UP]:    cam_y -= SPECTATOR_CAM_SPEED * dt
-                if pressed[pygame.K_s] or pressed[pygame.K_DOWN]:  cam_y += SPECTATOR_CAM_SPEED * dt
-                if pressed[pygame.K_a] or pressed[pygame.K_LEFT]:  cam_x -= SPECTATOR_CAM_SPEED * dt
-                if pressed[pygame.K_d] or pressed[pygame.K_RIGHT]: cam_x += SPECTATOR_CAM_SPEED * dt
+                wasd = (pressed[pygame.K_w] or pressed[pygame.K_s] or
+                        pressed[pygame.K_a] or pressed[pygame.K_d])
+                if wasd:
+                    follow_mode = False
+
+                alive_ships = [s for s in ships if s.get("alive")]
+
+                if follow_mode and alive_ships:
+                    follow_idx = follow_idx % len(alive_ships)
+                    followed   = alive_ships[follow_idx]
+                    cam_x, cam_y = followed["x"], followed["y"]
+                else:
+                    if pressed[pygame.K_w]: cam_y -= SPECTATOR_CAM_SPEED * dt
+                    if pressed[pygame.K_s]: cam_y += SPECTATOR_CAM_SPEED * dt
+                    if pressed[pygame.K_a]: cam_x -= SPECTATOR_CAM_SPEED * dt
+                    if pressed[pygame.K_d]: cam_x += SPECTATOR_CAM_SPEED * dt
             else:
                 my_ship = next((s for s in ships if s["id"] == _my_id), None)
                 if my_ship:
@@ -506,7 +530,16 @@ def run_game(screen: pygame.Surface, clock: pygame.time.Clock,
                     draw_death_overlay(screen, font_xl, font_md)
             else:
                 sw, sh = screen.get_size()
-                banner = font_sm.render("ZUSCHAUER  |  WASD: Kamera", True, (50, 50, 50))
+                alive_ships = [s for s in ships if s.get("alive")]
+                if follow_mode and alive_ships:
+                    fi = follow_idx % len(alive_ships)
+                    pid = alive_ships[fi]["id"][:8]
+                    banner_txt = f"ZUSCHAUER  |  Spieler {fi + 1}/{len(alive_ships)} ({pid}…)  |  Tab/←→: wechseln  |  WASD: frei"
+                elif follow_mode:
+                    banner_txt = "ZUSCHAUER  |  Kein Spieler  |  Tab/←→: folgen  |  WASD: Kamera"
+                else:
+                    banner_txt = "ZUSCHAUER  |  WASD: Kamera  |  Tab/←→: Spieler folgen"
+                banner = font_sm.render(banner_txt, True, (50, 50, 50))
                 screen.blit(banner, (sw // 2 - banner.get_width() // 2, 16))
 
             draw_minimap(screen, ships, _my_id)
