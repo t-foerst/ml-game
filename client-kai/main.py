@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """client-kai — KI-Bot-Client für ml-game.
 
-Verbindet sich als Bot (?type=bot) und empfängt egozentrische
-Observations vom Server. Die KI-Logik gehört in decide().
+Lädt trainiertes Model aus models/ falls vorhanden.
+Ohne Model: Bot steht still und kann abgeschossen werden.
 
 Start:
   python main.py                          # Standardserver
@@ -12,7 +12,9 @@ Start:
 import asyncio
 import json
 import sys
+from pathlib import Path
 
+import numpy as np
 import websockets
 
 SERVERS = [
@@ -21,39 +23,69 @@ SERVERS = [
 ]
 DEFAULT_SERVER = SERVERS[1][1]
 
+MODEL_FILE = Path(__file__).parent / "models" / "ppo_model.zip"
 
-# ── KI-Logik ──────────────────────────────────────────────────────────────────
+
+# ── Model laden (optional) ────────────────────────────────────────────────────
+
+def _load_model():
+    if not MODEL_FILE.exists():
+        print("[kai] Kein Model gefunden — Bot steht still.")
+        return None
+    try:
+        from stable_baselines3 import PPO
+        model = PPO.load(str(MODEL_FILE.with_suffix("")))
+        print(f"[kai] Model geladen: {MODEL_FILE}")
+        return model
+    except Exception as e:
+        print(f"[kai] Model-Ladefehler: {e} — Bot steht still.")
+        return None
+
+
+# ── Observation → Vektor ──────────────────────────────────────────────────────
+
+def _to_vec(observation: dict) -> np.ndarray:
+    from env import obs_to_vec
+    return obs_to_vec(observation)
+
+
+# ── KI-Entscheidung ───────────────────────────────────────────────────────────
+
+_model     = _load_model()
+_aim_angle = 0.0
+
 
 def decide(observation: dict) -> dict | None:
-    """KI-Entscheidung auf Basis der Observation.
+    global _aim_angle
 
-    Gibt einen Input-Dict zurück oder None (keine Aktion = steht still).
+    if _model is None:
+        return None
 
-    observation enthält:
-      self:    {x, y, angle, health, shoot_cooldown}
-      enemies: [{rel_x, rel_y, angle, health}, ...]
-      bullets: [{rel_x, rel_y, angle}, ...]
-    """
-    return None  # Platzhalter — Bot steht still
+    obs             = _to_vec(observation)
+    action, _       = _model.predict(obs, deterministic=True)
+
+    from env import action_to_input
+    inp, _aim_angle = action_to_input(action, _aim_angle)
+    return inp
 
 
 # ── Bot-Schleife ──────────────────────────────────────────────────────────────
 
 async def run(server_url: str) -> None:
     bot_url = f"{server_url}?type=bot"
-    print(f"Verbinde mit {bot_url} ...")
+    print(f"[kai] Verbinde mit {bot_url} ...")
 
     async with websockets.connect(bot_url) as ws:
-        print("Verbunden.")
+        print("[kai] Verbunden.")
         my_id: str | None = None
 
         async for raw in ws:
-            msg = json.loads(raw)
+            msg      = json.loads(raw)
             msg_type = msg.get("type")
 
             if msg_type == "welcome":
                 my_id = msg["player_id"]
-                print(f"Bot-ID: {my_id}")
+                print(f"[kai] Bot-ID: {my_id}")
 
             elif msg_type == "observation":
                 action = decide(msg)
@@ -63,19 +95,34 @@ async def run(server_url: str) -> None:
             elif msg_type == "events":
                 for ev in msg.get("events", []):
                     if ev.get("type") == "kill" and ev.get("victim") == my_id:
-                        print("Abgeschossen! Warte auf Respawn...")
+                        print("[kai] Abgeschossen!")
                     elif ev.get("type") == "kill" and ev.get("killer") == my_id:
-                        print("Kill!")
+                        print("[kai] Kill!")
 
 
 # ── Einstiegspunkt ────────────────────────────────────────────────────────────
 
+def _choose_server() -> str:
+    print("\nServer auswählen:")
+    for i, (name, url) in enumerate(SERVERS):
+        print(f"  [{i + 1}] {name}  ({url})")
+    print(f"  [Enter] Standard ({DEFAULT_SERVER})")
+    try:
+        choice = input("> ").strip()
+        idx = int(choice) - 1
+        if 0 <= idx < len(SERVERS):
+            return SERVERS[idx][1]
+    except (ValueError, EOFError):
+        pass
+    return DEFAULT_SERVER
+
+
 def main() -> None:
-    url = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_SERVER
+    url = sys.argv[1] if len(sys.argv) > 1 else _choose_server()
     try:
         asyncio.run(run(url))
     except KeyboardInterrupt:
-        print("\nBot beendet.")
+        print("\n[kai] Bot beendet.")
 
 
 if __name__ == "__main__":
