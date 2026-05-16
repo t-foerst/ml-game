@@ -25,6 +25,7 @@ class Room:
         self.players: dict[str, dict] = {}  # player_id → {ws, is_bot}
         self.spectators: dict[str, WebSocket] = {}  # spectator_id → ws
         self._task: Optional[asyncio.Task] = None
+        self._bg_tasks: set[asyncio.Task] = set()  # pending fire-and-forget sends
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._loop(), name=f"room-{self.room_id}")
@@ -37,31 +38,26 @@ class Room:
             except asyncio.CancelledError:
                 pass
 
-    async def send(self, ws: WebSocket, data: dict) -> None:
-        try:
-            await ws.send_text(json.dumps(data))
-        except Exception:
-            pass
-
-    async def broadcast(self, data: dict) -> None:
-        msg = json.dumps(data)
-        dead_players: list[str] = []
-        dead_spectators: list[str] = []
-        for pid, info in list(self.players.items()):
-            try:
-                await info["ws"].send_text(msg)
-            except Exception:
-                dead_players.append(pid)
-        for sid, ws in list(self.spectators.items()):
+    def _fire(self, ws: WebSocket, msg: str) -> None:
+        """Fire-and-forget send — never blocks the game loop."""
+        async def _do() -> None:
             try:
                 await ws.send_text(msg)
             except Exception:
-                dead_spectators.append(sid)
-        for pid in dead_players:
-            self.players.pop(pid, None)
-            self.game.remove_player(pid)
-        for sid in dead_spectators:
-            self.spectators.pop(sid, None)
+                pass
+        task = asyncio.create_task(_do())
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+
+    async def send(self, ws: WebSocket, data: dict) -> None:
+        self._fire(ws, json.dumps(data))
+
+    async def broadcast(self, data: dict) -> None:
+        msg = json.dumps(data)
+        for pid, info in list(self.players.items()):
+            self._fire(info["ws"], msg)
+        for sid, ws in list(self.spectators.items()):
+            self._fire(ws, msg)
 
     async def _loop(self) -> None:
         broadcast_every = max(1, TICK_RATE // BROADCAST_RATE)
