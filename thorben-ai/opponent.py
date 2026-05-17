@@ -1,15 +1,23 @@
-"""Algorithmischer Gegner-Bot: stationär, schießt immer direkt auf den Gegner."""
+"""Selbstspiel-Gegner: lädt das jeweils neueste Checkpoint-Modell."""
 
 import json
-import math
 import threading
 import time
 
+import numpy as np
+from env import build_input, parse_obs
 
-class AlgorithmicBot:
+
+class ModelOpponent:
     def __init__(self, server_url: str, room: str):
-        self._url  = f"{server_url}?type=bot&room={room}"
+        self._url = f"{server_url}?type=bot&room={room}"
+        self._model = None  # wird via update_model() atomar gesetzt
+        self._lock = threading.Lock()
         self._stop = threading.Event()
+
+    def update_model(self, model) -> None:
+        with self._lock:
+            self._model = model
 
     def start(self) -> None:
         self._stop.clear()
@@ -30,8 +38,6 @@ class AlgorithmicBot:
                     time.sleep(1.0)
 
     def _play(self, ws) -> None:
-        my_id = None
-
         while not self._stop.is_set():
             try:
                 raw = ws.recv(timeout=1.0)
@@ -40,29 +46,20 @@ class AlgorithmicBot:
             except Exception:
                 return
 
-            msg  = json.loads(raw)
-            kind = msg.get("type")
+            msg = json.loads(raw)
+            if msg.get("type") != "observation":
+                continue
 
-            if kind == "welcome":
-                my_id = msg.get("player_id")
+            obs = parse_obs(msg)
+            with self._lock:
+                model = self._model
 
-            elif kind == "observation":
-                enemies = msg.get("enemies", [])
-                if enemies:
-                    e   = enemies[0]
-                    aim = math.atan2(e["rel_y"], e["rel_x"])
-                else:
-                    aim = 0.0
+            if model is not None:
+                action, _ = model.predict(obs, deterministic=False)
+            else:
+                action = np.random.uniform(-1.0, 1.0, size=(5,)).astype(np.float32)
 
-                try:
-                    ws.send(json.dumps({
-                        "type":      "input",
-                        "up":        False,
-                        "down":      False,
-                        "left":      False,
-                        "right":     False,
-                        "shoot":     bool(enemies),
-                        "aim_angle": aim,
-                    }))
-                except Exception:
-                    return
+            try:
+                ws.send(json.dumps(build_input(action)))
+            except Exception:
+                return
