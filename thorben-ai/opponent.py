@@ -1,60 +1,22 @@
-"""Gegner-Bot für Selbstspiel.
-
-Läuft in einem Daemon-Thread, verbindet sich mit dem Server als Bot und
-spielt mit der aktuell geladenen Policy. Wird vom SelfPlayCallback periodisch
-auf einen neuen Checkpoint aktualisiert.
-
-Episode-Sync: Wenn der Trainings-Bot eine Episode beendet (disconnect + reconnect),
-schickt der Server ein "join"-Event. Der Opponent erkennt das und reconnectet
-ebenfalls → beide Schiffe spawnen neu in der Mitte.
-"""
+"""Algorithmischer Gegner-Bot: stationär, schießt immer direkt auf den Gegner."""
 
 import json
+import math
 import threading
 import time
-from typing import Optional
-
-import numpy as np
-
-from env import parse_obs, build_input, OBS_SIZE
 
 
-def _random_action() -> np.ndarray:
-    return np.random.uniform(-1.0, 1.0, size=(6,)).astype(np.float32)
-
-
-class _EpisodeEnd(Exception):
-    """Signalisiert dass der Trainings-Bot reconnectet ist → Opponent soll auch neu spawnen."""
-
-
-class OpponentBot:
-    """Selbstspiel-Gegner: verbindet sich als Bot und agiert mit einer Policy."""
-
+class AlgorithmicBot:
     def __init__(self, server_url: str, room: str):
-        self._url    = f"{server_url}?type=bot&room={room}"
-        self._model  = None          # SB3-Modell, thread-safe via Lock
-        self._lock   = threading.Lock()
-        self._stop   = threading.Event()
-        self._thread: Optional[threading.Thread] = None
-
-    # ── Öffentliche API ───────────────────────────────────────────────────────
-
-    def update_model(self, model) -> None:
-        """Setzt das Modell atomar (thread-safe). Darf jederzeit aufgerufen werden."""
-        with self._lock:
-            self._model = model
+        self._url  = f"{server_url}?type=bot&room={room}"
+        self._stop = threading.Event()
 
     def start(self) -> None:
         self._stop.clear()
-        self._thread = threading.Thread(
-            target=self._run, daemon=True, name=f"opp:{self._url}"
-        )
-        self._thread.start()
+        threading.Thread(target=self._run, daemon=True).start()
 
     def stop(self) -> None:
         self._stop.set()
-
-    # ── Bot-Loop ──────────────────────────────────────────────────────────────
 
     def _run(self) -> None:
         from websockets.sync.client import connect as ws_connect
@@ -63,14 +25,12 @@ class OpponentBot:
             try:
                 with ws_connect(self._url, open_timeout=15) as ws:
                     self._play(ws)
-            except _EpisodeEnd:
-                pass          # sofort reconnecten, kein sleep
             except Exception:
                 if not self._stop.is_set():
-                    time.sleep(2.0)
+                    time.sleep(1.0)
 
     def _play(self, ws) -> None:
-        my_id: Optional[str] = None
+        my_id = None
 
         while not self._stop.is_set():
             try:
@@ -86,21 +46,23 @@ class OpponentBot:
             if kind == "welcome":
                 my_id = msg.get("player_id")
 
-            elif kind == "join":
-                # Anderer Spieler hat reconnectet → Trainings-Bot startete neue Episode
-                if msg.get("player_id") != my_id:
-                    raise _EpisodeEnd()
-
             elif kind == "observation":
-                obs = parse_obs(msg)
-                with self._lock:
-                    model = self._model
-                action = (
-                    model.predict(obs, deterministic=False)[0]
-                    if model is not None
-                    else _random_action()
-                )
+                enemies = msg.get("enemies", [])
+                if enemies:
+                    e   = enemies[0]
+                    aim = math.atan2(e["rel_y"], e["rel_x"])
+                else:
+                    aim = 0.0
+
                 try:
-                    ws.send(json.dumps(build_input(action)))
+                    ws.send(json.dumps({
+                        "type":      "input",
+                        "up":        False,
+                        "down":      False,
+                        "left":      False,
+                        "right":     False,
+                        "shoot":     bool(enemies),
+                        "aim_angle": aim,
+                    }))
                 except Exception:
                     return
