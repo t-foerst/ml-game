@@ -13,6 +13,7 @@ Action (float32, shape=6, alle in [-1, 1]):
 
 import json
 import math
+import time
 
 import numpy as np
 import gymnasium as gym
@@ -92,12 +93,19 @@ class MlGameEnv(gym.Env):
                 self._ws.close()
             except Exception:
                 pass
-        self._ws        = ws_connect(
-            f"{self.server_url}?type=bot&room={self.room}",
-            open_timeout=10,
-        )
-        self._player_id = None
-        self._dead      = False
+            self._ws = None
+
+        url = f"{self.server_url}?type=bot&room={self.room}"
+        for attempt in range(30):
+            try:
+                self._ws = ws_connect(url, open_timeout=10)
+                self._player_id = None
+                self._dead = False
+                return
+            except Exception:
+                wait = min(2 ** attempt, 16)
+                time.sleep(wait)
+        raise RuntimeError(f"Server nicht erreichbar nach 30 Versuchen: {url}")
 
     def _recv(self):
         """Nächste Nachricht lesen. Bei Fehler → ws auf None setzen."""
