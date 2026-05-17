@@ -13,6 +13,9 @@ SHIP_MAX_HEALTH = 1
 RESPAWN_DELAY = 3.0  # seconds
 SPAWN_RANGE = 500.0  # ±px Spawn-Bereich (klein = Bots starten nah beieinander)
 
+BOT_SPAWN_RADIUS = 400.0  # Radius um Zentrum für KI-Trainings-Resets
+BOT_MIN_DISTANCE = 200.0  # Mindestabstand zwischen Schiffen beim KI-Reset
+
 
 class Bullet:
     def __init__(self, owner_id: str, x: float, y: float, angle: float):
@@ -253,6 +256,47 @@ class Game:
         # 4. Neue Geschosse einfügen (werden erst nächsten Tick bewegt)
         for b in new_bullets:
             self.bullets[b.id] = b
+
+        return events
+
+    def bot_reset(self, player_ids: list[str]) -> list[dict]:
+        """KI-Training: alle angegebenen Schiffe sofort um Zentrum neu platzieren.
+
+        Umgeht den Tod-Timer (RESPAWN_DELAY) und positioniert die Schiffe
+        innerhalb BOT_SPAWN_RADIUS mit mindestens BOT_MIN_DISTANCE Abstand.
+        Bullets werden gecleart. Nur für Bot-Clients aufrufen.
+        """
+        self.clear_bullets()
+        self._pending_respawns = [
+            entry for entry in self._pending_respawns if entry[1] not in player_ids
+        ]
+
+        events: list[dict] = []
+        placed: list[tuple[float, float]] = []
+
+        for pid in player_ids:
+            ship = self.ships.get(pid)
+            if not ship:
+                continue
+            x, y = 0.0, 0.0
+            for _ in range(100):
+                angle = random.uniform(0.0, math.pi * 2)
+                r = random.uniform(0.0, BOT_SPAWN_RADIUS)
+                x = math.cos(angle) * r
+                y = math.sin(angle) * r
+                if all(
+                    (x - px) ** 2 + (y - py) ** 2 >= BOT_MIN_DISTANCE ** 2
+                    for px, py in placed
+                ):
+                    break
+            placed.append((x, y))
+            ship.x = x
+            ship.y = y
+            ship.angle = random.uniform(0.0, math.pi * 2)
+            ship.health = SHIP_MAX_HEALTH
+            ship.alive = True
+            ship.shoot_cooldown = 0.0
+            events.append({"type": "respawn", "ship": pid})
 
         return events
 

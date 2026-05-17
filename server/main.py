@@ -225,6 +225,11 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 continue
             if msg.get("type") == "input":
                 room.game.set_input(client_id, msg)
+            elif msg.get("type") == "bot_reset" and is_bot:
+                bot_ids = [pid for pid, info in room.players.items() if info["is_bot"]]
+                events = room.game.bot_reset(bot_ids)
+                if events:
+                    await room.broadcast_all({"type": "events", "events": events})
     except WebSocketDisconnect:
         pass
     finally:

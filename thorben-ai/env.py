@@ -84,7 +84,7 @@ class MlGameEnv(gym.Env):
         self._player_id  = None
         self._reward_acc = 0.0
         self._step_count = 0
-        self._dead       = False  # Schiff gerade tot, wartet auf Respawn
+        self._dead       = False
 
     def _connect(self) -> None:
         if self._ws is not None:
@@ -133,31 +133,26 @@ class MlGameEnv(gym.Env):
             elif kind == "observation":
                 return parse_obs(msg), terminated
 
-    def _wait_for_respawn(self) -> None:
-        """Blockiert bis das eigene Schiff respawnt (Server-Event)."""
-        while self._ws is not None:
-            msg = self._recv()
-            if msg is None:
-                return
-            if msg.get("type") == "events":
-                for ev in msg.get("events", []):
-                    if ev["type"] == "respawn" and ev.get("ship") == self._player_id:
-                        self._dead = False
-                        return
+    def _send_bot_reset(self) -> None:
+        """Fordert sofortiges Respawn beider Bots an neuen Positionen an."""
+        if self._ws is None:
+            return
+        try:
+            self._ws.send(json.dumps({"type": "bot_reset"}))
+        except Exception:
+            self._ws = None
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
         self._reward_acc = 0.0
         self._step_count = 0
+        self._dead = False
 
         if self._ws is None:
-            # Erste Episode oder Verbindung abgebrochen → neu verbinden
             self._connect()
-        elif self._dead:
-            # Gestorben → auf Respawn warten statt reconnecten
-            self._wait_for_respawn()
-            if self._ws is None:
-                self._connect()
+
+        # Bot-Reset: Tod-Timer umgehen, beide Bots sofort neu positionieren
+        self._send_bot_reset()
 
         obs, _ = self._drain_until_obs()
         return obs, {}
