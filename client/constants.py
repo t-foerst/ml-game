@@ -4,9 +4,13 @@ FPS = 60
 
 # Spielparameter
 MAX_HP = 1
+WORLD_SIZE = 1000  # Spielfeld-Grenze (muss mit server/game.py übereinstimmen)
 MINIMAP_SIZE = 160
 MINIMAP_SCALE = 1 / 20  # 1 Minimap-px = 20 Welteinheiten
 INDICATOR_DIST = 90  # px vom Spieler-Mittelpunkt zu Feind-Indikatoren
+
+# Todeszone-Grenze
+WALL_COLOR = (200, 50, 50)
 
 # Bekannte Server
 SERVERS = [

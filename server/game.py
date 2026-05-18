@@ -12,6 +12,7 @@ SHOOT_COOLDOWN = 0.5  # seconds
 SHIP_MAX_HEALTH = 1
 RESPAWN_DELAY = 3.0  # seconds
 SPAWN_RANGE = 500.0  # ±px Spawn-Bereich (klein = Bots starten nah beieinander)
+WORLD_SIZE = 1000.0  # Spielfeld-Grenze (±WORLD_SIZE px vom Zentrum)
 
 BOT_SPAWN_RADIUS = 400.0  # Radius um Zentrum für KI-Trainings-Resets
 BOT_MIN_DISTANCE = 200.0  # Mindestabstand zwischen Schiffen beim KI-Reset
@@ -219,7 +220,15 @@ class Game:
             if bullet:
                 new_bullets.append(bullet)
 
-        # 3. Kollision: bestehende Geschosse vs. Schiffe
+        # 3a. Grenzprüfung: Schiff außerhalb Spielfeld → sofort sterben
+        for ship in list(self.ships.values()):
+            if ship.alive and (abs(ship.x) > WORLD_SIZE or abs(ship.y) > WORLD_SIZE):
+                ship.alive = False
+                ship.health = 0
+                events.append({"type": "kill", "killer": None, "victim": ship.id})
+                self._pending_respawns.append((self._time + RESPAWN_DELAY, ship.id))
+
+        # 3b. Kollision: bestehende Geschosse vs. Schiffe
         consumed: set[str] = set()
         for bullet in list(self.bullets.values()):
             if bullet.id in consumed:
@@ -253,7 +262,7 @@ class Game:
                         )
                     break
 
-        # 4. Neue Geschosse einfügen (werden erst nächsten Tick bewegt)
+        # 4. Kollision: Neue Geschosse einfügen (werden erst nächsten Tick bewegt)
         for b in new_bullets:
             self.bullets[b.id] = b
 

@@ -19,7 +19,9 @@ from constants import (
     MINIMAP_SCALE,
     MINIMAP_SIZE,
     ORIGIN,
+    WALL_COLOR,
     WHITE,
+    WORLD_SIZE,
 )
 
 # ── Parallax-Hintergrund ──────────────────────────────────────────────────────
@@ -130,6 +132,18 @@ def draw_grid(surf: pygame.Surface, cam_x: float, cam_y: float) -> None:
     ox, oy = w2s(0, 0, cam_x, cam_y, sw, sh)
     pygame.draw.line(surf, ORIGIN, (ox - 12, oy), (ox + 12, oy), 2)
     pygame.draw.line(surf, ORIGIN, (ox, oy - 12), (ox, oy + 12), 2)
+
+
+def draw_boundary(surf: pygame.Surface, cam_x: float, cam_y: float) -> None:
+    sw, sh = surf.get_size()
+    x0, y0 = w2s(-WORLD_SIZE, -WORLD_SIZE, cam_x, cam_y, sw, sh)
+    x1, y1 = w2s( WORLD_SIZE,  WORLD_SIZE, cam_x, cam_y, sw, sh)
+    rect = pygame.Rect(x0, y0, x1 - x0, y1 - y0)
+    r, g, b = WALL_COLOR
+    for thickness, alpha in ((8, 25), (4, 60), (2, 140)):
+        tmp = pygame.Surface((sw, sh), pygame.SRCALPHA)
+        pygame.draw.rect(tmp, (r, g, b, alpha), rect, thickness)
+        surf.blit(tmp, (0, 0))
 
 
 # ── Spielerfarben ─────────────────────────────────────────────────────────────

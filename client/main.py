@@ -31,7 +31,7 @@ from constants import BG, GRID, DARK, DIMGRAY, WHITE, GRAY, WIN_W, WIN_H, FPS, S
 from network import state_q, input_q, start_network, stop_network
 from renderer import (
     draw_background, draw_nebula,
-    draw_grid, draw_ship, draw_bullet, draw_effect,
+    draw_grid, draw_boundary, draw_ship, draw_bullet, draw_effect,
     draw_minimap, draw_hud, draw_death_overlay,
     draw_enemy_indicators, draw_crosshair,
 )
@@ -515,6 +515,7 @@ def run_game(screen: pygame.Surface, clock: pygame.time.Clock,
             draw_background(screen, cam_x, cam_y)
             draw_nebula(screen, cam_x, cam_y)
             draw_grid(screen, cam_x, cam_y)
+            draw_boundary(screen, cam_x, cam_y)
 
             for b in _state.get("bullets", []):
                 draw_bullet(screen, b, cam_x, cam_y)

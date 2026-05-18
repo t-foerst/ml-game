@@ -1,4 +1,4 @@
-"""PPO-Selbstspiel-Training (1v1, mehrere Räume parallel).
+"""PPO-Ausweich-Training gegen algorithmischen Kreis-Gegner (mehrere Räume parallel).
 
 Setup:
   1. Server starten: cd ../server && uvicorn main:app --port 3001
@@ -10,6 +10,7 @@ Umgebungsvariablen:
   N_ENVS=4          Anzahl paralleler Räume (Standard: 4)
   TOTAL_STEPS=500000
   SERVER_URL=ws://localhost:3001/ws
+  SPEED_MULTIPLIER=1
 
 TensorBoard:
   tensorboard --logdir tb_logs
@@ -18,60 +19,25 @@ TensorBoard:
 import os
 import socket
 import sys
-import threading
 import time
 from pathlib import Path
 
 from env import MlGameEnv
-from opponent import ModelOpponent
+from opponent import CircleOpponent
 from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
+from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
-SERVER_URL = os.environ.get("SERVER_URL", "ws://localhost:3001/ws")
-TOTAL_STEPS = int(os.environ.get("TOTAL_STEPS", "500_000"))
-N_ENVS = int(os.environ.get("N_ENVS", "4"))
+SERVER_URL       = os.environ.get("SERVER_URL",       "ws://localhost:3001/ws")
+TOTAL_STEPS      = int(os.environ.get("TOTAL_STEPS",  "500_000"))
+N_ENVS           = int(os.environ.get("N_ENVS",       "4"))
+SPEED_MULTIPLIER = float(os.environ.get("SPEED_MULTIPLIER", "1.0"))
 
 CHECKPOINT_DIR = Path("checkpoints")
-TB_LOG_DIR = Path("tb_logs")
-SELFPLAY_FREQ = 20_000  # Schritte zwischen Gegner-Updates
+TB_LOG_DIR     = Path("tb_logs")
 
 # Gesamter Rollout bleibt ~2048 Steps unabhängig von N_ENVS
 N_STEPS = max(64, 2048 // N_ENVS)
-
-
-class SelfPlayCallback(BaseCallback):
-    """Speichert alle SELFPLAY_FREQ Schritte einen Checkpoint und
-    aktualisiert alle Gegner-Bots auf das neue Modell."""
-
-    def __init__(self, opponents: list[ModelOpponent], save_dir: Path):
-        super().__init__(verbose=1)
-        self.opponents = opponents
-        self.save_dir = save_dir
-        self._last_update = 0
-
-    def _on_step(self) -> bool:
-        if self.num_timesteps - self._last_update < SELFPLAY_FREQ:
-            return True
-        self._last_update = self.num_timesteps
-
-        path = str(self.save_dir / "selfplay_latest")
-        opponents = list(self.opponents)
-        self.model.save(path)
-
-        def _load_and_update() -> None:
-            try:
-                model = PPO.load(path, device="cpu")
-                for opp in opponents:
-                    opp.update_model(model)
-                print(
-                    f"[SelfPlay] Schritt {self.num_timesteps:,} – Gegner aktualisiert"
-                )
-            except Exception as e:
-                print(f"[SelfPlay] Fehler beim Laden: {e}")
-
-        threading.Thread(target=_load_and_update, daemon=True).start()
-        return True
 
 
 def _check_server(host: str, port: int) -> bool:
@@ -85,7 +51,6 @@ def _check_server(host: str, port: int) -> bool:
 def make_env_fn(server_url: str, room: str):
     def _init():
         return MlGameEnv(server_url=server_url, room=room, max_steps=1000)
-
     return _init
 
 
@@ -101,8 +66,11 @@ def main() -> None:
         print(f"FEHLER: Server nicht erreichbar auf {host}:{port}")
         sys.exit(1)
 
-    rooms = [f"training-{i}" for i in range(N_ENVS)]
-    opponents = [ModelOpponent(SERVER_URL, room=r) for r in rooms]
+    rooms     = [f"training-{i}" for i in range(N_ENVS)]
+    opponents = [
+        CircleOpponent(SERVER_URL, room=r, speed_multiplier=SPEED_MULTIPLIER)
+        for r in rooms
+    ]
     for opp in opponents:
         opp.start()
     time.sleep(1.5)
@@ -131,15 +99,12 @@ def main() -> None:
     try:
         model.learn(
             total_timesteps=TOTAL_STEPS,
-            callback=[
-                SelfPlayCallback(opponents, CHECKPOINT_DIR),
-                CheckpointCallback(
-                    save_freq=50_000,
-                    save_path=str(CHECKPOINT_DIR),
-                    name_prefix="ppo",
-                    verbose=1,
-                ),
-            ],
+            callback=CheckpointCallback(
+                save_freq=50_000,
+                save_path=str(CHECKPOINT_DIR),
+                name_prefix="ppo",
+                verbose=1,
+            ),
             tb_log_name="ppo",
             progress_bar=True,
         )

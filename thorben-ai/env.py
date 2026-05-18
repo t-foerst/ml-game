@@ -1,14 +1,14 @@
-"""Gymnasium-Umgebung für einen ml-game Bot (1v1).
+"""Gymnasium-Umgebung für einen ml-game Bot (nur Ausweichen).
 
-Observation (float32, shape=10):
-  [0:2]   Vektor zum Gegner  – rel_x/2000, rel_y/2000          (0 wenn kein Gegner)
-  [2:10]  Die 2 nächsten Bullets (zero-padded)
-            je Bullet: rel_x/2000, rel_y/2000, cos(angle), sin(angle)
+Observation (float32, shape=14):
+  [0:2]   Eigene Position      – x/WORLD_SIZE, y/WORLD_SIZE
+  [2:4]   Gegner-Position      – x/WORLD_SIZE, y/WORLD_SIZE  (0 wenn kein Gegner)
+  [4:14]  Die 5 nächsten Bullets (zero-padded)
+            je Bullet: x/WORLD_SIZE, y/WORLD_SIZE
 
-Action (float32, shape=5, alle in [-1, 1]):
+Action (float32, shape=4, alle in [-1, 1]):
   [0] up  [1] down  [2] left  [3] right  →  >0 = True
-  [4] aim_angle                           →  * π = Radiant
-  (shoot wird immer automatisch gesendet)
+  (shoot immer False, nur Ausweichen trainiert)
 """
 
 import json
@@ -20,37 +20,38 @@ import numpy as np
 from gymnasium import spaces
 from websockets.sync.client import connect as ws_connect
 
-N_BULLETS = 2
-OBS_SIZE = 2 + N_BULLETS * 4  # 10
+WORLD_SIZE = 1000.0  # muss mit server/game.py übereinstimmen
 
-R_KILL = 0
+N_BULLETS = 5
+OBS_SIZE = 2 + 2 + N_BULLETS * 2  # 14
+
 R_DEATH = -3.0
 R_STEP = 0.02  # Überleben-Bonus pro Schritt
-R_DISTANCE = -0.01  # Strafe pro normierter Distanzeinheit zum Gegner
-R_AIM = (
-    0.05  # Bonus wenn Zielwinkel grob auf Gegner zeigt (cos-gewichtet, max pro Schritt)
-)
 
 
 def parse_obs(msg: dict) -> np.ndarray:
     arr = np.zeros(OBS_SIZE, dtype=np.float32)
 
+    self_info = msg.get("self", {})
+    sx = float(self_info.get("x", 0.0))
+    sy = float(self_info.get("y", 0.0))
+    arr[0] = sx / WORLD_SIZE
+    arr[1] = sy / WORLD_SIZE
+
     enemies = msg.get("enemies", [])
     if enemies:
         e = enemies[0]
-        arr[0] = e["rel_x"] / 2000.0
-        arr[1] = e["rel_y"] / 2000.0
+        arr[2] = (sx + e["rel_x"]) / WORLD_SIZE
+        arr[3] = (sy + e["rel_y"]) / WORLD_SIZE
 
     bullets = sorted(
         msg.get("bullets", []),
         key=lambda b: b["rel_x"] ** 2 + b["rel_y"] ** 2,
     )
     for i, b in enumerate(bullets[:N_BULLETS]):
-        base = 2 + i * 4
-        arr[base] = b["rel_x"] / 2000.0
-        arr[base + 1] = b["rel_y"] / 2000.0
-        arr[base + 2] = math.cos(b["angle"])
-        arr[base + 3] = math.sin(b["angle"])
+        base = 4 + i * 2
+        arr[base] = (sx + b["rel_x"]) / WORLD_SIZE
+        arr[base + 1] = (sy + b["rel_y"]) / WORLD_SIZE
 
     return arr
 
@@ -62,8 +63,8 @@ def build_input(action: np.ndarray) -> dict:
         "down": bool(action[1] > 0),
         "left": bool(action[2] > 0),
         "right": bool(action[3] > 0),
-        "shoot": True,
-        "aim_angle": float(action[4]) * math.pi,
+        "shoot": False,
+        "aim_angle": 0.0,
     }
 
 
@@ -83,8 +84,8 @@ class MlGameEnv(gym.Env):
         self.max_steps = max_steps
         self.recv_timeout = recv_timeout
 
-        self.observation_space = spaces.Box(-1.0, 1.0, (OBS_SIZE,), dtype=np.float32)
-        self.action_space = spaces.Box(-1.0, 1.0, (5,), dtype=np.float32)
+        self.observation_space = spaces.Box(-2.0, 2.0, (OBS_SIZE,), dtype=np.float32)
+        self.action_space = spaces.Box(-1.0, 1.0, (4,), dtype=np.float32)
 
         self._ws = None
         self._player_id = None
@@ -130,12 +131,9 @@ class MlGameEnv(gym.Env):
 
             elif kind == "events":
                 for ev in msg.get("events", []):
-                    if ev["type"] == "kill":
-                        if ev.get("killer") == self._player_id:
-                            self._reward_acc += R_KILL
-                        if ev.get("victim") == self._player_id:
-                            self._reward_acc += R_DEATH
-                            terminated = True
+                    if ev["type"] == "kill" and ev.get("victim") == self._player_id:
+                        self._reward_acc += R_DEATH
+                        terminated = True
 
             elif kind == "observation":
                 return parse_obs(msg), terminated
@@ -148,7 +146,6 @@ class MlGameEnv(gym.Env):
         if self._ws is None:
             self._connect()
 
-        # Beide Bots sofort an neuen Positionen respawnen (kein Reconnect nötig)
         try:
             self._ws.send(json.dumps({"type": "bot_reset"}))
         except Exception:
@@ -170,16 +167,7 @@ class MlGameEnv(gym.Env):
 
         obs, terminated = self._drain_until_obs()
 
-        # Per-step Belohnungen
         self._reward_acc += R_STEP
-        if obs[0] != 0.0 or obs[1] != 0.0:  # Gegner sichtbar
-            dist = math.sqrt(obs[0] ** 2 + obs[1] ** 2)
-            self._reward_acc += R_DISTANCE * dist
-
-            aim_angle = float(action[4]) * math.pi
-            enemy_angle = math.atan2(obs[1], obs[0])
-            alignment = math.cos(aim_angle - enemy_angle)  # 1 = perfekt, -1 = weg
-            self._reward_acc += R_AIM * max(0.0, alignment)
 
         truncated = self._step_count >= self.max_steps
         return obs, self._reward_acc, terminated, truncated, {}
